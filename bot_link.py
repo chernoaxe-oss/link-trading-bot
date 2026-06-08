@@ -208,7 +208,7 @@ def verificar_senal():
         enviar_mensaje(f"⚠️ Error en el bot: {str(e)}")
 
 obtener_ultimo_mensaje()
-enviar_mensaje("🤖 Bot actualizado - Señales a vos y tu amigo")
+enviar_mensaje("🤖 Bot 15min activo - Long y Short con confirmacion")
 
 while True:
     now = datetime.now()
