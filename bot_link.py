@@ -7,18 +7,51 @@ from datetime import datetime
 
 TOKEN = "8876856197:AAEtpTiDK4zlgoCYvGv09Tzl1L9B9s3bWAc"
 CHAT_ID = "1482855145"
+NOTION_TOKEN = "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"
+NOTION_DB_ID = "33f9d65898f4808dbe28e21c1cf69379"
 
 alerta_enviada = False
-senal_entrada_enviada = False
 senal_salida_enviada = False
+en_operacion = False
+precio_entrada = 0
 
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     params = {"chat_id": CHAT_ID, "text": texto}
     requests.get(url, params=params)
 
+def registrar_en_notion(resultado, porcentaje, total_real):
+    url = "https://api.notion.com/v1/pages"
+    headers = {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    data = {
+        "parent": {"database_id": NOTION_DB_ID},
+        "properties": {
+            "Aa": {
+                "title": [{"text": {"content": "LINK"}}]
+            },
+            "RESULTADO": {
+                "select": {"name": resultado}
+            },
+            "PORCENTAJE": {
+                "number": porcentaje
+            },
+            "Fecha": {
+                "date": {"start": datetime.now().strftime("%Y-%m-%d")}
+            },
+            "TOTAL REAL": {
+                "number": total_real
+            }
+        }
+    }
+    response = requests.post(url, headers=headers, json=data)
+    return response.status_code
+
 def verificar_senal():
-    global alerta_enviada, senal_entrada_enviada, senal_salida_enviada
+    global alerta_enviada, senal_salida_enviada, en_operacion, precio_entrada
     try:
         data = yf.download("LINK-USD", period="1d", interval="15m", progress=False)
         data = data[['Close', 'High', 'Low', 'Open', 'Volume']]
@@ -28,20 +61,18 @@ def verificar_senal():
         rsi = ta.momentum.RSIIndicator(close, window=14).rsi()
         bb = ta.volatility.BollingerBands(close, window=20, window_dev=2.0)
 
-        # Vela actual (en curso)
         rsi_actual = rsi.iloc[-1]
         precio_actual = close.iloc[-1]
         banda_inferior_actual = bb.bollinger_lband().iloc[-1]
         banda_superior_actual = bb.bollinger_hband().iloc[-1]
 
-        # Vela anterior (cerrada)
         rsi_anterior = rsi.iloc[-2]
         precio_anterior = close.iloc[-2]
         banda_inferior_anterior = bb.bollinger_lband().iloc[-2]
         banda_superior_anterior = bb.bollinger_hband().iloc[-2]
 
-        # ALERTA TEMPRANA - precio toca banda durante la vela actual
-        if rsi_actual < 30 and precio_actual <= banda_inferior_actual and not alerta_enviada:
+        # ALERTA TEMPRANA
+        if rsi_actual < 30 and precio_actual <= banda_inferior_actual and not alerta_enviada and not en_operacion:
             mensaje = f"⚠️ ALERTA TEMPRANA - LINK\n"
             mensaje += f"El precio está tocando la banda inferior AHORA\n"
             mensaje += f"RSI: {rsi_actual:.2f}\n"
@@ -49,36 +80,48 @@ def verificar_senal():
             mensaje += f"Esperá el cierre de la vela para confirmar entrada"
             enviar_mensaje(mensaje)
             alerta_enviada = True
-            senal_entrada_enviada = False
+
         elif not (rsi_actual < 30 and precio_actual <= banda_inferior_actual):
             alerta_enviada = False
 
-        # SEÑAL DE ENTRADA - vela cerrada con condiciones cumplidas
-        if rsi_anterior < 30 and precio_anterior <= banda_inferior_anterior and not senal_entrada_enviada:
+        # SEÑAL DE ENTRADA CONFIRMADA
+        if rsi_anterior < 30 and precio_anterior <= banda_inferior_anterior and not en_operacion:
+            precio_entrada = float(precio_actual)
+            en_operacion = True
+            senal_salida_enviada = False
             mensaje = f"🟢 SEÑAL DE ENTRADA CONFIRMADA - LINK\n"
-            mensaje += f"La vela cerró con condiciones cumplidas\n"
             mensaje += f"RSI: {rsi_anterior:.2f}\n"
-            mensaje += f"Precio de entrada: ${precio_actual:.4f}\n"
+            mensaje += f"Precio de entrada: ${precio_entrada:.4f}\n"
             mensaje += f"⚡ Entrar con 30% del Trading Power AHORA"
             enviar_mensaje(mensaje)
-            senal_entrada_enviada = True
 
-        # SEÑAL DE SALIDA - vela cerrada con condiciones cumplidas
-        if rsi_anterior > 70 and precio_anterior >= banda_superior_anterior and not senal_salida_enviada:
+        # SEÑAL DE SALIDA CONFIRMADA
+        if rsi_anterior > 70 and precio_anterior >= banda_superior_anterior and en_operacion and not senal_salida_enviada:
+            precio_salida = float(precio_actual)
+            porcentaje = ((precio_salida - precio_entrada) / precio_entrada) * 100
+            resultado = "TP" if porcentaje > 0 else "SL"
+            en_operacion = False
+            senal_salida_enviada = True
+
             mensaje = f"🔴 SEÑAL DE SALIDA CONFIRMADA - LINK\n"
-            mensaje += f"La vela cerró con condiciones cumplidas\n"
             mensaje += f"RSI: {rsi_anterior:.2f}\n"
-            mensaje += f"Precio actual: ${precio_actual:.4f}\n"
+            mensaje += f"Precio entrada: ${precio_entrada:.4f}\n"
+            mensaje += f"Precio salida: ${precio_salida:.4f}\n"
+            mensaje += f"Resultado: {resultado} ({porcentaje:.2f}%)\n"
             mensaje += f"⚡ Cerrar posición AHORA"
             enviar_mensaje(mensaje)
-            senal_salida_enviada = True
-        elif not (rsi_anterior > 70 and precio_anterior >= banda_superior_anterior):
-            senal_salida_enviada = False
+
+            # Registrar en Notion
+            status = registrar_en_notion(resultado, round(porcentaje, 2), 0)
+            if status == 200:
+                enviar_mensaje(f"✅ Operación registrada en Notion")
+            else:
+                enviar_mensaje(f"⚠️ Error al registrar en Notion (status {status})")
 
     except Exception as e:
         enviar_mensaje(f"⚠️ Error en el bot: {str(e)}")
 
-enviar_mensaje("🤖 Bot de LINK actualizado. Alertas tempranas activadas!")
+enviar_mensaje("🤖 Bot de LINK actualizado con Notion. Monitoreando señales...")
 
 while True:
     now = datetime.now()
