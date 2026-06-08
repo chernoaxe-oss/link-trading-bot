@@ -7,6 +7,7 @@ from datetime import datetime
 
 TOKEN = "8876856197:AAEtpTiDK4zlgoCYvGv09Tzl1L9B9s3bWAc"
 CHAT_ID = "1482855145"
+CHAT_ID_AMIGO = "7611216982"
 NOTION_TOKEN = "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"
 NOTION_DB_ID = "33f9d65898f4808dbe28e21c1cf69379"
 NOTION_FONDEO_DB_ID = "3799d65898f480539868f003b846e5d7"
@@ -16,15 +17,16 @@ entrada_enviada_ts = None
 salida_enviada_ts = None
 en_operacion = False
 precio_entrada = 0
-direccion_actual = None  # 'long' o 'short'
+direccion_actual = None
 esperando_confirmacion = False
 alerta_ts_pendiente = None
 ultimo_update_id = None
 
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    params = {"chat_id": CHAT_ID, "text": texto}
-    requests.get(url, params=params)
+    for chat in [CHAT_ID, CHAT_ID_AMIGO]:
+        params = {"chat_id": chat, "text": texto}
+        requests.get(url, params=params)
 
 def obtener_ultimo_mensaje():
     global ultimo_update_id
@@ -34,10 +36,11 @@ def obtener_ultimo_mensaje():
         response = requests.get(url, params=params)
         data = response.json()
         if data["ok"] and data["result"]:
-            ultimo = data["result"][-1]
-            ultimo_update_id = ultimo["update_id"] + 1
-            if "message" in ultimo and "text" in ultimo["message"]:
-                return ultimo["message"]["text"].lower().strip()
+            for update in data["result"]:
+                ultimo_update_id = update["update_id"] + 1
+                if "message" in update and "text" in update["message"]:
+                    if str(update["message"]["chat"]["id"]) == CHAT_ID:
+                        return update["message"]["text"].lower().strip()
     except:
         pass
     return None
@@ -130,7 +133,6 @@ def verificar_senal():
                 enviar_mensaje(mensaje)
                 return
             elif ts_actual != alerta_ts_pendiente and ts_anterior != alerta_ts_pendiente:
-                # Pasó más de una vela sin respuesta = NO
                 esperando_confirmacion = False
                 alerta_ts_pendiente = None
                 direccion_actual = None
@@ -205,10 +207,8 @@ def verificar_senal():
     except Exception as e:
         enviar_mensaje(f"⚠️ Error en el bot: {str(e)}")
 
-# Inicializar offset de mensajes
 obtener_ultimo_mensaje()
-
-enviar_mensaje("🤖 Bot actualizado - Long y Short con confirmacion 'si'")
+enviar_mensaje("🤖 Bot actualizado - Señales a vos y tu amigo")
 
 while True:
     now = datetime.now()
