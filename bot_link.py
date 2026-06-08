@@ -9,6 +9,7 @@ TOKEN = "8876856197:AAEtpTiDK4zlgoCYvGv09Tzl1L9B9s3bWAc"
 CHAT_ID = "1482855145"
 NOTION_TOKEN = "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"
 NOTION_DB_ID = "33f9d65898f4808dbe28e21c1cf69379"
+NOTION_FONDEO_DB_ID = "3799d65898f480539868f003b846e5d7"
 
 alerta_enviada = False
 senal_salida_enviada = False
@@ -44,6 +45,51 @@ def registrar_en_notion(resultado, porcentaje, total_real):
             },
             "TOTAL REAL": {
                 "number": total_real
+            }
+        }
+    }
+    response = requests.post(url, headers=headers, json=data)
+    return response.status_code
+
+def registrar_en_notion_fondeo(resultado, precio_entrada, precio_salida, porcentaje, ganancia_dolares, balance, fase="Fase 1", cuenta="Cuenta 1"):
+    url = "https://api.notion.com/v1/pages"
+    headers = {
+        "Authorization": f"Bearer {NOTION_TOKEN}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    data = {
+        "parent": {"database_id": NOTION_FONDEO_DB_ID},
+        "properties": {
+            "Nombre": {
+                "title": [{"text": {"content": f"LINK - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]
+            },
+            "Cuenta": {
+                "select": {"name": cuenta}
+            },
+            "Fase": {
+                "select": {"name": fase}
+            },
+            "Resultado": {
+                "select": {"name": resultado}
+            },
+            "Precio entrada": {
+                "number": precio_entrada
+            },
+            "Precio salida": {
+                "number": precio_salida
+            },
+            "Porcentaje": {
+                "number": porcentaje
+            },
+            "Ganancia/Perdida": {
+                "number": ganancia_dolares
+            },
+            "Balance cuenta": {
+                "number": balance
+            },
+            "Fecha": {
+                "date": {"start": datetime.now().strftime("%Y-%m-%d")}
             }
         }
     }
@@ -92,7 +138,8 @@ def verificar_senal():
             mensaje = f"🟢 SEÑAL DE ENTRADA CONFIRMADA - LINK\n"
             mensaje += f"RSI: {rsi_anterior:.2f}\n"
             mensaje += f"Precio de entrada: ${precio_entrada:.4f}\n"
-            mensaje += f"⚡ Entrar con 30% del Trading Power AHORA"
+            mensaje += f"⚡ Entrar con 30% del Trading Power en Quantfury\n"
+            mensaje += f"⚡ Entrar con 100x en Bybit"
             enviar_mensaje(mensaje)
 
         # SEÑAL DE SALIDA CONFIRMADA
@@ -100,6 +147,7 @@ def verificar_senal():
             precio_salida = float(precio_actual)
             porcentaje = ((precio_salida - precio_entrada) / precio_entrada) * 100
             resultado = "TP" if porcentaje > 0 else "SL"
+            ganancia_dolares = round(50000 * porcentaje / 100, 2)
             en_operacion = False
             senal_salida_enviada = True
 
@@ -108,20 +156,31 @@ def verificar_senal():
             mensaje += f"Precio entrada: ${precio_entrada:.4f}\n"
             mensaje += f"Precio salida: ${precio_salida:.4f}\n"
             mensaje += f"Resultado: {resultado} ({porcentaje:.2f}%)\n"
-            mensaje += f"⚡ Cerrar posición AHORA"
+            mensaje += f"Ganancia/Pérdida en fondeo: ${ganancia_dolares:.2f}\n"
+            mensaje += f"⚡ Cerrar posición en Quantfury y Bybit AHORA"
             enviar_mensaje(mensaje)
 
-            # Registrar en Notion
-            status = registrar_en_notion(resultado, round(porcentaje, 2), 0)
+            # Registrar en Notion Quantfury
+            registrar_en_notion(resultado, round(porcentaje, 2), 0)
+
+            # Registrar en Notion Fondeo
+            status = registrar_en_notion_fondeo(
+                resultado,
+                precio_entrada,
+                precio_salida,
+                round(porcentaje, 2),
+                ganancia_dolares,
+                0
+            )
             if status == 200:
-                enviar_mensaje(f"✅ Operación registrada en Notion")
+                enviar_mensaje(f"✅ Operación registrada en ambos journals de Notion")
             else:
-                enviar_mensaje(f"⚠️ Error al registrar en Notion (status {status})")
+                enviar_mensaje(f"⚠️ Error al registrar en Notion Fondeo (status {status})")
 
     except Exception as e:
         enviar_mensaje(f"⚠️ Error en el bot: {str(e)}")
 
-enviar_mensaje("🤖 Bot de LINK actualizado con Notion. Monitoreando señales...")
+enviar_mensaje("🤖 Bot de LINK actualizado con Journal Fondeo. Monitoreando señales...")
 
 while True:
     now = datetime.now()
