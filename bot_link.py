@@ -13,17 +13,14 @@ NOTION_DB_ID = "33f9d65898f4808dbe28e21c1cf69379"
 NOTION_FONDEO_DB_ID = "3799d65898f480539868f003b846e5d7"
 
 alerta_long_ts = None
-alerta_short_ts = None
 entrada_enviada_ts = None
 salida_enviada_ts = None
 en_operacion = False
 precio_entrada = 0
-direccion_actual = None
 esperando_confirmacion = False
 alerta_ts_pendiente = None
 ultimo_update_id = None
 banda_inf_tocada_ts = None
-banda_sup_tocada_ts = None
 
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -94,10 +91,10 @@ def registrar_en_notion_fondeo(resultado, p_entrada, p_salida, porcentaje, ganan
     return response.status_code
 
 def verificar_senal():
-    global alerta_long_ts, alerta_short_ts, entrada_enviada_ts, salida_enviada_ts
-    global en_operacion, precio_entrada, direccion_actual
+    global alerta_long_ts, entrada_enviada_ts, salida_enviada_ts
+    global en_operacion, precio_entrada
     global esperando_confirmacion, alerta_ts_pendiente
-    global banda_inf_tocada_ts, banda_sup_tocada_ts
+    global banda_inf_tocada_ts
 
     try:
         data = yf.download("LINK-USD", period="5d", interval="15m", progress=False)
@@ -120,15 +117,9 @@ def verificar_senal():
         banda_sup_anterior = float(bb.bollinger_hband().iloc[-2])
         ts_anterior = data.index[-2]
 
-        # Registrar cuando precio toca banda inferior (para long)
         if precio_actual <= banda_inf_actual:
             banda_inf_tocada_ts = ts_actual
 
-        # Registrar cuando precio toca banda superior (para short)
-        if precio_actual >= banda_sup_actual:
-            banda_sup_tocada_ts = ts_actual
-
-        # Verificar respuesta "si"
         if esperando_confirmacion:
             mensaje_usuario = obtener_ultimo_mensaje()
             if mensaje_usuario == "si":
@@ -136,21 +127,17 @@ def verificar_senal():
                 precio_entrada = precio_actual
                 en_operacion = True
                 salida_enviada_ts = None
-                tipo = "LONG 📈" if direccion_actual == "long" else "SHORT 📉"
-                mensaje = f"🟢 ENTRADA CONFIRMADA - {tipo}\n"
+                mensaje = f"🟢 ENTRADA CONFIRMADA - LONG 📈\n"
                 mensaje += f"Precio de entrada: ${precio_entrada:.4f}\n"
-                mensaje += f"⚡ Entrar con 30% del Trading Power en Quantfury\n"
-                mensaje += f"⚡ Entrar con 100x en Bybit"
+                mensaje += f"⚡ Entrar con 30% del Trading Power en Quantfury"
                 enviar_mensaje(mensaje)
                 return
             elif ts_actual != alerta_ts_pendiente and ts_anterior != alerta_ts_pendiente:
                 esperando_confirmacion = False
                 alerta_ts_pendiente = None
-                direccion_actual = None
 
         if not en_operacion and not esperando_confirmacion:
-
-            # ALERTA TEMPRANA LONG: precio toca banda inferior Y RSI llega a 30
+            # ALERTA TEMPRANA LONG
             if precio_actual <= banda_inf_actual and rsi_actual <= 30:
                 if alerta_long_ts != ts_actual:
                     mensaje = f"⚠️ ALERTA TEMPRANA - LONG 📈\n"
@@ -160,57 +147,28 @@ def verificar_senal():
                     enviar_mensaje(mensaje)
                     alerta_long_ts = ts_actual
 
-            # ENTRADA LONG: RSI cruza hacia arriba la línea de 30
-            # (vela anterior RSI <= 30, vela actual RSI > 30) Y banda inf tocada recientemente
+            # ENTRADA LONG: RSI cruza hacia arriba 30
             if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada_ts is not None:
                 if entrada_enviada_ts != ts_actual:
-                    precio_entrada_tentativo = precio_actual
                     esperando_confirmacion = True
                     alerta_ts_pendiente = ts_actual
-                    direccion_actual = "long"
                     entrada_enviada_ts = ts_actual
                     mensaje = f"🟢 SEÑAL ENTRADA LONG 📈\n"
-                    mensaje += f"RSI cruzó hacia arriba la línea de 30\n"
-                    mensaje += f"RSI anterior: {rsi_anterior:.2f} → RSI actual: {rsi_actual:.2f}\n"
-                    mensaje += f"Precio: ${precio_actual:.4f}\n"
-                    mensaje += f"Respondé 'si' para confirmar entrada"
-                    enviar_mensaje(mensaje)
-
-            # ALERTA TEMPRANA SHORT: precio toca banda superior Y RSI llega a 70
-            if precio_actual >= banda_sup_actual and rsi_actual >= 70:
-                if alerta_short_ts != ts_actual:
-                    mensaje = f"⚠️ ALERTA TEMPRANA - SHORT 📉\n"
-                    mensaje += f"RSI: {rsi_actual:.2f} tocó 70\n"
-                    mensaje += f"Precio: ${precio_actual:.4f} tocó banda superior\n"
-                    mensaje += f"Esperá que el RSI cruce hacia abajo para entrar"
-                    enviar_mensaje(mensaje)
-                    alerta_short_ts = ts_actual
-
-            # ENTRADA SHORT: RSI cruza hacia abajo la línea de 70
-            # (vela anterior RSI >= 70, vela actual RSI < 70) Y banda sup tocada recientemente
-            if rsi_anterior >= 70 and rsi_actual < 70 and banda_sup_tocada_ts is not None:
-                if entrada_enviada_ts != ts_actual:
-                    esperando_confirmacion = True
-                    alerta_ts_pendiente = ts_actual
-                    direccion_actual = "short"
-                    entrada_enviada_ts = ts_actual
-                    mensaje = f"🔴 SEÑAL ENTRADA SHORT 📉\n"
-                    mensaje += f"RSI cruzó hacia abajo la línea de 70\n"
-                    mensaje += f"RSI anterior: {rsi_anterior:.2f} → RSI actual: {rsi_actual:.2f}\n"
+                    mensaje += f"RSI cruzó hacia arriba 30\n"
+                    mensaje += f"RSI: {rsi_anterior:.2f} → {rsi_actual:.2f}\n"
                     mensaje += f"Precio: ${precio_actual:.4f}\n"
                     mensaje += f"Respondé 'si' para confirmar entrada"
                     enviar_mensaje(mensaje)
 
         # SEÑAL DE SALIDA
         if en_operacion and salida_enviada_ts != ts_anterior:
-            if direccion_actual == "long" and rsi_anterior >= 70 and precio_anterior >= banda_sup_anterior:
+            if rsi_anterior >= 70 and precio_anterior >= banda_sup_anterior:
                 precio_salida = precio_actual
                 porcentaje = ((precio_salida - precio_entrada) / precio_entrada) * 100
                 resultado = "TP" if porcentaje > 0 else "SL"
                 ganancia_dolares = round(50000 * porcentaje / 100, 2)
                 en_operacion = False
                 salida_enviada_ts = ts_anterior
-                direccion_actual = None
                 banda_inf_tocada_ts = None
 
                 mensaje = f"🔴 SALIDA LONG - {resultado}\n"
@@ -222,35 +180,17 @@ def verificar_senal():
                 status = registrar_en_notion_fondeo(resultado, precio_entrada, precio_salida, round(porcentaje, 2), ganancia_dolares, 0)
                 if status == 200:
                     enviar_mensaje(f"✅ Operacion registrada en Notion")
-
-            elif direccion_actual == "short" and rsi_anterior <= 30 and precio_anterior <= banda_inf_anterior:
-                precio_salida = precio_actual
-                porcentaje = ((precio_entrada - precio_salida) / precio_entrada) * 100
-                resultado = "TP" if porcentaje > 0 else "SL"
-                ganancia_dolares = round(50000 * porcentaje / 100, 2)
-                en_operacion = False
-                salida_enviada_ts = ts_anterior
-                direccion_actual = None
-                banda_sup_tocada_ts = None
-
-                mensaje = f"🔴 SALIDA SHORT - {resultado}\n"
-                mensaje += f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_salida:.4f}\n"
-                mensaje += f"Resultado: {porcentaje:.2f}% | Fondeo: ${ganancia_dolares:.2f}\n"
-                mensaje += f"⚡ Cerrar posicion AHORA"
-                enviar_mensaje(mensaje)
-                registrar_en_notion(resultado, round(porcentaje, 2), 0)
-                status = registrar_en_notion_fondeo(resultado, precio_entrada, precio_salida, round(porcentaje, 2), ganancia_dolares, 0)
-                if status == 200:
-                    enviar_mensaje(f"✅ Operacion registrada en Notion")
+                else:
+                    enviar_mensaje(f"⚠️ Error Notion: {status}")
 
     except Exception as e:
-        enviar_mensaje(f"⚠️ Error en el bot: {str(e)}")
+        enviar_mensaje(f"⚠️ Error: {str(e)}")
 
 obtener_ultimo_mensaje()
-enviar_mensaje("🤖 Bot actualizado - Cruce RSI 30/70 activado")
+enviar_mensaje("🤖 Bot actualizado - Solo LONG 15min")
 
 while True:
     now = datetime.now()
-    print(f"{now.strftime('%H:%M:%S')} - Verificando señal...")
+    print(f"{now.strftime('%H:%M:%S')} - Verificando...")
     verificar_senal()
     time.sleep(60)
