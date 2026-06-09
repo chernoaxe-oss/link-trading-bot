@@ -12,7 +12,8 @@ NOTION_TOKEN = "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"
 NOTION_DB_ID = "33f9d65898f4808dbe28e21c1cf69379"
 NOTION_FONDEO_DB_ID = "3799d65898f480539868f003b846e5d7"
 
-alerta_enviada_ts = None
+alerta_long_ts = None
+alerta_short_ts = None
 entrada_enviada_ts = None
 salida_enviada_ts = None
 en_operacion = False
@@ -21,6 +22,8 @@ direccion_actual = None
 esperando_confirmacion = False
 alerta_ts_pendiente = None
 ultimo_update_id = None
+banda_inf_tocada_ts = None
+banda_sup_tocada_ts = None
 
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -91,9 +94,10 @@ def registrar_en_notion_fondeo(resultado, p_entrada, p_salida, porcentaje, ganan
     return response.status_code
 
 def verificar_senal():
-    global alerta_enviada_ts, entrada_enviada_ts, salida_enviada_ts
+    global alerta_long_ts, alerta_short_ts, entrada_enviada_ts, salida_enviada_ts
     global en_operacion, precio_entrada, direccion_actual
     global esperando_confirmacion, alerta_ts_pendiente
+    global banda_inf_tocada_ts, banda_sup_tocada_ts
 
     try:
         data = yf.download("LINK-USD", period="1d", interval="1m", progress=False)
@@ -110,11 +114,17 @@ def verificar_senal():
         banda_inf_actual = float(bb.bollinger_lband().iloc[-1])
         banda_sup_actual = float(bb.bollinger_hband().iloc[-1])
 
-        ts_anterior = data.index[-2]
         rsi_anterior = float(rsi.iloc[-2])
         precio_anterior = float(close.iloc[-2])
         banda_inf_anterior = float(bb.bollinger_lband().iloc[-2])
         banda_sup_anterior = float(bb.bollinger_hband().iloc[-2])
+        ts_anterior = data.index[-2]
+
+        if precio_actual <= banda_inf_actual:
+            banda_inf_tocada_ts = ts_actual
+
+        if precio_actual >= banda_sup_actual:
+            banda_sup_tocada_ts = ts_actual
 
         if esperando_confirmacion:
             mensaje_usuario = obtener_ultimo_mensaje()
@@ -135,30 +145,58 @@ def verificar_senal():
                 direccion_actual = None
 
         if not en_operacion and not esperando_confirmacion:
-            if rsi_actual < 30 and precio_actual <= banda_inf_actual:
-                if alerta_enviada_ts != ts_actual:
-                    mensaje = f"⚠️ SCALPING - LONG 📈\n"
-                    mensaje += f"RSI: {rsi_actual:.2f} | Precio: ${precio_actual:.4f}\n"
-                    mensaje += f"Respondé 'si' para entrar"
+
+            # ALERTA TEMPRANA LONG
+            if precio_actual <= banda_inf_actual and rsi_actual <= 30:
+                if alerta_long_ts != ts_actual:
+                    mensaje = f"⚠️ SCALPING ALERTA LONG 📈\n"
+                    mensaje += f"RSI: {rsi_actual:.2f} tocó 30\n"
+                    mensaje += f"Precio: ${precio_actual:.4f} tocó banda inferior\n"
+                    mensaje += f"Esperá cruce RSI hacia arriba"
                     enviar_mensaje(mensaje)
-                    alerta_enviada_ts = ts_actual
+                    alerta_long_ts = ts_actual
+
+            # ENTRADA LONG: RSI cruza hacia arriba 30
+            if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada_ts is not None:
+                if entrada_enviada_ts != ts_actual:
                     esperando_confirmacion = True
                     alerta_ts_pendiente = ts_actual
                     direccion_actual = "long"
-
-            elif rsi_actual > 70 and precio_actual >= banda_sup_actual:
-                if alerta_enviada_ts != ts_actual:
-                    mensaje = f"⚠️ SCALPING - SHORT 📉\n"
-                    mensaje += f"RSI: {rsi_actual:.2f} | Precio: ${precio_actual:.4f}\n"
+                    entrada_enviada_ts = ts_actual
+                    mensaje = f"🟢 SCALPING ENTRADA LONG 📈\n"
+                    mensaje += f"RSI cruzó hacia arriba 30\n"
+                    mensaje += f"RSI: {rsi_anterior:.2f} → {rsi_actual:.2f}\n"
+                    mensaje += f"Precio: ${precio_actual:.4f}\n"
                     mensaje += f"Respondé 'si' para entrar"
                     enviar_mensaje(mensaje)
-                    alerta_enviada_ts = ts_actual
+
+            # ALERTA TEMPRANA SHORT
+            if precio_actual >= banda_sup_actual and rsi_actual >= 70:
+                if alerta_short_ts != ts_actual:
+                    mensaje = f"⚠️ SCALPING ALERTA SHORT 📉\n"
+                    mensaje += f"RSI: {rsi_actual:.2f} tocó 70\n"
+                    mensaje += f"Precio: ${precio_actual:.4f} tocó banda superior\n"
+                    mensaje += f"Esperá cruce RSI hacia abajo"
+                    enviar_mensaje(mensaje)
+                    alerta_short_ts = ts_actual
+
+            # ENTRADA SHORT: RSI cruza hacia abajo 70
+            if rsi_anterior >= 70 and rsi_actual < 70 and banda_sup_tocada_ts is not None:
+                if entrada_enviada_ts != ts_actual:
                     esperando_confirmacion = True
                     alerta_ts_pendiente = ts_actual
                     direccion_actual = "short"
+                    entrada_enviada_ts = ts_actual
+                    mensaje = f"🔴 SCALPING ENTRADA SHORT 📉\n"
+                    mensaje += f"RSI cruzó hacia abajo 70\n"
+                    mensaje += f"RSI: {rsi_anterior:.2f} → {rsi_actual:.2f}\n"
+                    mensaje += f"Precio: ${precio_actual:.4f}\n"
+                    mensaje += f"Respondé 'si' para entrar"
+                    enviar_mensaje(mensaje)
 
+        # SALIDA LONG
         if en_operacion and salida_enviada_ts != ts_anterior:
-            if direccion_actual == "long" and rsi_anterior > 70 and precio_anterior >= banda_sup_anterior:
+            if direccion_actual == "long" and rsi_anterior >= 70 and precio_anterior >= banda_sup_anterior:
                 precio_salida = precio_actual
                 porcentaje = ((precio_salida - precio_entrada) / precio_entrada) * 100
                 resultado = "TP" if porcentaje > 0 else "SL"
@@ -166,7 +204,8 @@ def verificar_senal():
                 en_operacion = False
                 salida_enviada_ts = ts_anterior
                 direccion_actual = None
-                mensaje = f"🔴 SALIDA SCALPING LONG - {resultado}\n"
+                banda_inf_tocada_ts = None
+                mensaje = f"🔴 SCALPING SALIDA LONG - {resultado}\n"
                 mensaje += f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_salida:.4f}\n"
                 mensaje += f"Resultado: {porcentaje:.2f}% | Fondeo: ${ganancia_dolares:.2f}\n"
                 mensaje += f"⚡ Cerrar posicion AHORA"
@@ -176,7 +215,8 @@ def verificar_senal():
                 if status == 200:
                     enviar_mensaje(f"✅ Operacion registrada en Notion")
 
-            elif direccion_actual == "short" and rsi_anterior < 30 and precio_anterior <= banda_inf_anterior:
+            # SALIDA SHORT
+            elif direccion_actual == "short" and rsi_anterior <= 30 and precio_anterior <= banda_inf_anterior:
                 precio_salida = precio_actual
                 porcentaje = ((precio_entrada - precio_salida) / precio_entrada) * 100
                 resultado = "TP" if porcentaje > 0 else "SL"
@@ -184,7 +224,8 @@ def verificar_senal():
                 en_operacion = False
                 salida_enviada_ts = ts_anterior
                 direccion_actual = None
-                mensaje = f"🔴 SALIDA SCALPING SHORT - {resultado}\n"
+                banda_sup_tocada_ts = None
+                mensaje = f"🔴 SCALPING SALIDA SHORT - {resultado}\n"
                 mensaje += f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_salida:.4f}\n"
                 mensaje += f"Resultado: {porcentaje:.2f}% | Fondeo: ${ganancia_dolares:.2f}\n"
                 mensaje += f"⚡ Cerrar posicion AHORA"
@@ -198,7 +239,7 @@ def verificar_senal():
         enviar_mensaje(f"⚠️ Error bot scalping: {str(e)}")
 
 obtener_ultimo_mensaje()
-enviar_mensaje("🤖 Bot SCALPING iniciado - Listo para operar")
+enviar_mensaje("🤖 Bot SCALPING actualizado - Cruce RSI 30/70")
 
 while True:
     now = datetime.now()
