@@ -5,7 +5,7 @@ import ta
 import time
 from datetime import datetime
 
-TOKEN = "8876856197:AAEtpTiDK4zlgoCYvGv09Tzl1L9B9s3bWAc"
+TOKEN = "8876856197:AAG4x0X7i61Sfk9rW-22vfftqVQ517Ri-UA"
 CHAT_ID = "1482855145"
 CHAT_ID_AMIGO = "7611216982"
 NOTION_TOKEN = "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"
