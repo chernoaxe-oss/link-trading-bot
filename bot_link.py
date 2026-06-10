@@ -9,8 +9,7 @@ TOKEN = "8876856197:AAG4x0X7i61Sfk9rW-22vfftqVQ517Ri-UA"
 CHAT_ID = "1482855145"
 CHAT_ID_AMIGO = "7611216982"
 NOTION_TOKEN = "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"
-NOTION_DB_ID = "33f9d65898f4808dbe28e21c1cf69379"
-NOTION_FONDEO_DB_ID = "3799d65898f480539868f003b846e5d7"
+NOTION_FONDEO_DB_ID = "3799d658-98f4-8053-9868-f003b846e5d7"
 
 alerta_long_ts = None
 entrada_enviada_ts = None
@@ -45,27 +44,7 @@ def obtener_ultimo_mensaje():
         pass
     return None
 
-def registrar_en_notion(resultado, porcentaje, total_real):
-    url = "https://api.notion.com/v1/pages"
-    headers = {
-        "Authorization": f"Bearer {NOTION_TOKEN}",
-        "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28"
-    }
-    data = {
-        "parent": {"database_id": NOTION_DB_ID},
-        "properties": {
-            "Aa": {"title": [{"text": {"content": "LINK"}}]},
-            "RESULTADO": {"select": {"name": resultado}},
-            "PORCENTAJE": {"number": porcentaje},
-            "Fecha": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}},
-            "TOTAL REAL": {"number": total_real}
-        }
-    }
-    response = requests.post(url, headers=headers, json=data)
-    return response.status_code
-
-def registrar_en_notion_fondeo(resultado, p_entrada, p_salida, porcentaje, ganancia_dolares, balance):
+def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dolares, plataforma):
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -76,14 +55,12 @@ def registrar_en_notion_fondeo(resultado, p_entrada, p_salida, porcentaje, ganan
         "parent": {"database_id": NOTION_FONDEO_DB_ID},
         "properties": {
             "Nombre": {"title": [{"text": {"content": f"LINK - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]},
-            "Cuenta": {"select": {"name": "Cuenta 1"}},
-            "Fase": {"select": {"name": "Fase 1"}},
+            "PLATAFORMA": {"select": {"name": plataforma}},
             "Resultado": {"select": {"name": resultado}},
-            "Precio entrada": {"number": p_entrada},
-            "Precio salida": {"number": p_salida},
+            "Precio de entradsa": {"number": p_entrada},
+            "Precio de salida": {"number": p_salida},
             "Porcentaje": {"number": porcentaje},
-            "Ganancia/Perdida": {"number": ganancia_dolares},
-            "Balance cuenta": {"number": balance},
+            "Ganacia/ Perdida": {"number": ganancia_dolares},
             "Fecha": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}}
         }
     }
@@ -109,7 +86,6 @@ def verificar_senal():
         rsi_actual = float(rsi.iloc[-1])
         precio_actual = float(close.iloc[-1])
         banda_inf_actual = float(bb.bollinger_lband().iloc[-1])
-        banda_sup_actual = float(bb.bollinger_hband().iloc[-1])
 
         rsi_anterior = float(rsi.iloc[-2])
         precio_anterior = float(close.iloc[-2])
@@ -137,7 +113,6 @@ def verificar_senal():
                 alerta_ts_pendiente = None
 
         if not en_operacion and not esperando_confirmacion:
-            # ALERTA TEMPRANA LONG
             if precio_actual <= banda_inf_actual and rsi_actual <= 30:
                 if alerta_long_ts != ts_actual:
                     mensaje = f"⚠️ ALERTA TEMPRANA - LONG 📈\n"
@@ -147,7 +122,6 @@ def verificar_senal():
                     enviar_mensaje(mensaje)
                     alerta_long_ts = ts_actual
 
-            # ENTRADA LONG: RSI cruza hacia arriba 30
             if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada_ts is not None:
                 if entrada_enviada_ts != ts_actual:
                     esperando_confirmacion = True
@@ -160,7 +134,6 @@ def verificar_senal():
                     mensaje += f"Respondé 'si' para confirmar entrada"
                     enviar_mensaje(mensaje)
 
-        # SEÑAL DE SALIDA
         if en_operacion and salida_enviada_ts != ts_anterior:
             if rsi_anterior >= 70 and precio_anterior >= banda_sup_anterior:
                 precio_salida = precio_actual
@@ -176,8 +149,8 @@ def verificar_senal():
                 mensaje += f"Resultado: {porcentaje:.2f}% | Fondeo: ${ganancia_dolares:.2f}\n"
                 mensaje += f"⚡ Cerrar posicion AHORA"
                 enviar_mensaje(mensaje)
-                registrar_en_notion(resultado, round(porcentaje, 2), 0)
-                status = registrar_en_notion_fondeo(resultado, precio_entrada, precio_salida, round(porcentaje, 2), ganancia_dolares, 0)
+
+                status = registrar_operacion(resultado, precio_entrada, precio_salida, round(porcentaje, 2), ganancia_dolares, "Quantfury")
                 if status == 200:
                     enviar_mensaje(f"✅ Operacion registrada en Notion")
                 else:
@@ -187,7 +160,7 @@ def verificar_senal():
         enviar_mensaje(f"⚠️ Error: {str(e)}")
 
 obtener_ultimo_mensaje()
-enviar_mensaje("🤖 Bot actualizado - Solo LONG 15min")
+enviar_mensaje("🤖 Bot actualizado - Notion unificado")
 
 while True:
     now = datetime.now()
