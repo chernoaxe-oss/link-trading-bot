@@ -9,8 +9,7 @@ TOKEN = "8876856197:AAG4x0X7i61Sfk9rW-22vfftqVQ517Ri-UA"
 CHAT_ID = "1482855145"
 CHAT_ID_AMIGO = "7611216982"
 NOTION_TOKEN = "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"
-NOTION_DB_ID = "33f9d65898f4808dbe28e21c1cf69379"
-NOTION_FONDEO_DB_ID = "3799d65898f480539868f003b846e5d7"
+NOTION_FONDEO_DB_ID = "3799d658-98f4-8053-9868-f003b846e5d7"
 
 alerta_long_ts = None
 entrada_enviada_ts = None
@@ -45,27 +44,7 @@ def obtener_ultimo_mensaje():
         pass
     return None
 
-def registrar_en_notion(resultado, porcentaje, total_real):
-    url = "https://api.notion.com/v1/pages"
-    headers = {
-        "Authorization": f"Bearer {NOTION_TOKEN}",
-        "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28"
-    }
-    data = {
-        "parent": {"database_id": NOTION_DB_ID},
-        "properties": {
-            "Aa": {"title": [{"text": {"content": "LINK Scalping"}}]},
-            "RESULTADO": {"select": {"name": resultado}},
-            "PORCENTAJE": {"number": porcentaje},
-            "Fecha": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}},
-            "TOTAL REAL": {"number": total_real}
-        }
-    }
-    response = requests.post(url, headers=headers, json=data)
-    return response.status_code
-
-def registrar_en_notion_fondeo(resultado, p_entrada, p_salida, porcentaje, ganancia_dolares, balance):
+def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dolares, plataforma):
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -76,14 +55,12 @@ def registrar_en_notion_fondeo(resultado, p_entrada, p_salida, porcentaje, ganan
         "parent": {"database_id": NOTION_FONDEO_DB_ID},
         "properties": {
             "Nombre": {"title": [{"text": {"content": f"LINK Scalping - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]},
-            "Cuenta": {"select": {"name": "Cuenta 1"}},
-            "Fase": {"select": {"name": "Fase 1"}},
+            "PLATAFORMA": {"select": {"name": plataforma}},
             "Resultado": {"select": {"name": resultado}},
-            "Precio entrada": {"number": p_entrada},
-            "Precio salida": {"number": p_salida},
+            "Precio de entradsa": {"number": p_entrada},
+            "Precio de salida": {"number": p_salida},
             "Porcentaje": {"number": porcentaje},
-            "Ganancia/Perdida": {"number": ganancia_dolares},
-            "Balance cuenta": {"number": balance},
+            "Ganacia/ Perdida": {"number": ganancia_dolares},
             "Fecha": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}}
         }
     }
@@ -129,7 +106,7 @@ def verificar_senal():
                 salida_enviada_ts = None
                 mensaje = f"🟢 ENTRADA SCALPING LONG 📈\n"
                 mensaje += f"Precio: ${precio_entrada:.4f}\n"
-                mensaje += f"⚡ Entrar con 50x en Bybit"
+                mensaje += f"⚡ Entrar con 20x en Bybit"
                 enviar_mensaje(mensaje)
                 return
             elif ts_actual != alerta_ts_pendiente and ts_anterior != alerta_ts_pendiente:
@@ -137,7 +114,6 @@ def verificar_senal():
                 alerta_ts_pendiente = None
 
         if not en_operacion and not esperando_confirmacion:
-            # ALERTA TEMPRANA LONG
             if precio_actual <= banda_inf_actual and rsi_actual <= 30:
                 if alerta_long_ts != ts_actual:
                     mensaje = f"⚠️ SCALPING ALERTA LONG 📈\n"
@@ -147,7 +123,6 @@ def verificar_senal():
                     enviar_mensaje(mensaje)
                     alerta_long_ts = ts_actual
 
-            # ENTRADA LONG: RSI cruza hacia arriba 30
             if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada_ts is not None:
                 if entrada_enviada_ts != ts_actual:
                     esperando_confirmacion = True
@@ -160,13 +135,12 @@ def verificar_senal():
                     mensaje += f"Respondé 'si' para entrar"
                     enviar_mensaje(mensaje)
 
-        # SALIDA LONG
         if en_operacion and salida_enviada_ts != ts_anterior:
             if rsi_anterior >= 70 and precio_anterior >= banda_sup_anterior:
                 precio_salida = precio_actual
                 porcentaje = ((precio_salida - precio_entrada) / precio_entrada) * 100
                 resultado = "TP" if porcentaje > 0 else "SL"
-                ganancia_dolares = round(25000 * porcentaje / 100, 2)
+                ganancia_dolares = round(10000 * porcentaje / 100, 2)
                 en_operacion = False
                 salida_enviada_ts = ts_anterior
                 banda_inf_tocada_ts = None
@@ -176,16 +150,18 @@ def verificar_senal():
                 mensaje += f"Resultado: {porcentaje:.2f}% | Fondeo: ${ganancia_dolares:.2f}\n"
                 mensaje += f"⚡ Cerrar posicion AHORA"
                 enviar_mensaje(mensaje)
-                registrar_en_notion(resultado, round(porcentaje, 2), 0)
-                status = registrar_en_notion_fondeo(resultado, precio_entrada, precio_salida, round(porcentaje, 2), ganancia_dolares, 0)
+
+                status = registrar_operacion(resultado, precio_entrada, precio_salida, round(porcentaje, 2), ganancia_dolares, "Fondeo")
                 if status == 200:
                     enviar_mensaje(f"✅ Operacion registrada en Notion")
+                else:
+                    enviar_mensaje(f"⚠️ Error Notion: {status}")
 
     except Exception as e:
         enviar_mensaje(f"⚠️ Error bot scalping: {str(e)}")
 
 obtener_ultimo_mensaje()
-enviar_mensaje("🤖 Bot SCALPING actualizado - Solo LONG 1min")
+enviar_mensaje("🤖 Bot SCALPING actualizado - Registra como Fondeo")
 
 while True:
     now = datetime.now()
