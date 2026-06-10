@@ -106,7 +106,8 @@ def verificar_senal():
                 salida_enviada_ts = None
                 mensaje = f"🟢 ENTRADA SCALPING LONG 📈\n"
                 mensaje += f"Precio: ${precio_entrada:.4f}\n"
-                mensaje += f"⚡ Entrar con 20x en Bybit"
+                mensaje += f"⚡ Entrar con 50x en Bybit\n"
+                mensaje += f"⚡ Margen: $500 | Posicion: $25,000"
                 enviar_mensaje(mensaje)
                 return
             elif ts_actual != alerta_ts_pendiente and ts_anterior != alerta_ts_pendiente:
@@ -140,7 +141,8 @@ def verificar_senal():
                 precio_salida = precio_actual
                 porcentaje = ((precio_salida - precio_entrada) / precio_entrada) * 100
                 resultado = "TP" if porcentaje > 0 else "SL"
-                ganancia_dolares = round(10000 * porcentaje / 100, 2)
+                comision = 25000 * 0.0011
+                ganancia_dolares = round(100000 * porcentaje / 100 - comision, 2)
                 en_operacion = False
                 salida_enviada_ts = ts_anterior
                 banda_inf_tocada_ts = None
@@ -161,7 +163,7 @@ def verificar_senal():
         enviar_mensaje(f"⚠️ Error bot scalping: {str(e)}")
 
 obtener_ultimo_mensaje()
-enviar_mensaje("🤖 Bot SCALPING actualizado - Registra como Fondeo")
+enviar_mensaje("🤖 Bot SCALPING - Cuenta $100k Break activa!")
 
 while True:
     now = datetime.now()
