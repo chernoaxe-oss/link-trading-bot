@@ -1,85 +1,88 @@
 import requests
-import yfinance as yf
 import pandas as pd
 import ta
+from datetime import datetime
 import time
 import json
 import os
-from datetime import datetime
 
+# ── Configuración ─────────────────────────────────────────────────────────────
 TOKEN = "8876856197:AAG4x0X7i61Sfk9rW-22vfftqVQ517Ri-UA"
 CHAT_ID = "1482855145"
 CHAT_ID_AMIGO = "7611216982"
 NOTION_TOKEN = "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"
 NOTION_FONDEO_DB_ID = "3799d658-98f4-8053-9868-f003b846e5d7"
-ESTADO_FILE = "estado_scalping.json"
+ESTADO_FILE = "estado_turtle.json"
 
-# ── Estado en memoria ──────────────────────────────────────────────────────────
-alerta_long_ts = None
-entrada_enviada_ts = None
-salida_enviada_ts = None
+SYMBOL = "LINKUSDT"
+MARGEN = 1000
+APALANCAMIENTO = 50
+POSICION = MARGEN * APALANCAMIENTO  # $50,000
+TP_PCT = 0.01
+SL_PCT = 0.03
+COMISION = POSICION * 0.0011
+
+# Horario de sueño UTC (23:00-07:00 AR = 02:00-10:00 UTC)
+HORA_INICIO_SUENO = 2
+HORA_FIN_SUENO = 10
+
+# ── Estado ────────────────────────────────────────────────────────────────────
 en_operacion = False
 precio_entrada = 0
+precio_tp = 0
+precio_sl = 0
+direccion = None
 esperando_confirmacion = False
 alerta_ts_pendiente = None
 ultimo_update_id = None
-banda_inf_tocada_ts = None
+banda_inf_tocada_5m = False
+banda_sup_tocada_5m = False
 ciclos_esperando = 0
-CICLOS_MAX_ESPERA = 6  # 6 ciclos x 30s = 3 minutos
+CICLOS_MAX_ESPERA = 6  # 3 minutos (6 x 30s)
 
-# ── Persistencia de estado ─────────────────────────────────────────────────────
 def guardar_estado():
     estado = {
         "en_operacion": en_operacion,
         "precio_entrada": precio_entrada,
+        "precio_tp": precio_tp,
+        "precio_sl": precio_sl,
+        "direccion": direccion,
         "esperando_confirmacion": esperando_confirmacion,
-        "ciclos_esperando": ciclos_esperando,
-        "banda_inf_tocada_ts": str(banda_inf_tocada_ts) if banda_inf_tocada_ts is not None else None,
-        "alerta_ts_pendiente": str(alerta_ts_pendiente) if alerta_ts_pendiente is not None else None,
-        "entrada_enviada_ts": str(entrada_enviada_ts) if entrada_enviada_ts is not None else None,
-        "salida_enviada_ts": str(salida_enviada_ts) if salida_enviada_ts is not None else None,
         "ultimo_update_id": ultimo_update_id,
+        "ciclos_esperando": ciclos_esperando
     }
     with open(ESTADO_FILE, "w") as f:
         json.dump(estado, f)
 
 def cargar_estado():
-    global en_operacion, precio_entrada, esperando_confirmacion
-    global banda_inf_tocada_ts, alerta_ts_pendiente
-    global entrada_enviada_ts, salida_enviada_ts, ultimo_update_id
-
+    global en_operacion, precio_entrada, precio_tp, precio_sl
+    global direccion, esperando_confirmacion, ultimo_update_id, ciclos_esperando
     if not os.path.exists(ESTADO_FILE):
         return
-
     try:
         with open(ESTADO_FILE, "r") as f:
             estado = json.load(f)
-
-        en_operacion = estado.get("en_operacion", False)
-        precio_entrada = estado.get("precio_entrada", 0)
+        en_operacion         = estado.get("en_operacion", False)
+        precio_entrada       = estado.get("precio_entrada", 0)
+        precio_tp            = estado.get("precio_tp", 0)
+        precio_sl            = estado.get("precio_sl", 0)
+        direccion            = estado.get("direccion", None)
         esperando_confirmacion = estado.get("esperando_confirmacion", False)
-        ciclos_esperando = estado.get("ciclos_esperando", 0)
-        ultimo_update_id = estado.get("ultimo_update_id", None)
-
-        banda_inf_tocada_ts = estado.get("banda_inf_tocada_ts", None)
-        alerta_ts_pendiente = estado.get("alerta_ts_pendiente", None)
-        entrada_enviada_ts = estado.get("entrada_enviada_ts", None)
-        salida_enviada_ts = estado.get("salida_enviada_ts", None)
-
+        ultimo_update_id     = estado.get("ultimo_update_id", None)
+        ciclos_esperando     = estado.get("ciclos_esperando", 0)
         if en_operacion:
-            enviar_mensaje(f"🔄 Bot SCALPING reiniciado con operación abierta\nPrecio de entrada: ${precio_entrada:.4f}\nMonitoreando salida...")
+            enviar_mensaje(f"🔄 Bot reiniciado con operación abierta\n{direccion} a ${precio_entrada:.4f}\nTP: ${precio_tp:.4f} | SL: ${precio_sl:.4f}")
         elif esperando_confirmacion:
             esperando_confirmacion = False
-            alerta_ts_pendiente = None
+            ciclos_esperando = 0
             guardar_estado()
-            enviar_mensaje("🔄 Bot SCALPING reiniciado — señal pendiente cancelada, esperando nueva oportunidad")
+            enviar_mensaje("🔄 Bot reiniciado — señal pendiente cancelada")
         else:
-            enviar_mensaje("🔄 Bot SCALPING reiniciado — sin operación abierta")
-
+            enviar_mensaje("🔄 Bot Turtle reiniciado — sin operación abierta")
     except Exception as e:
-        enviar_mensaje(f"⚠️ Error cargando estado scalping: {str(e)}")
+        enviar_mensaje(f"⚠️ Error cargando estado: {str(e)}")
 
-# ── Telegram ───────────────────────────────────────────────────────────────────
+# ── Telegram ──────────────────────────────────────────────────────────────────
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     for chat in [CHAT_ID, CHAT_ID_AMIGO]:
@@ -103,8 +106,8 @@ def obtener_ultimo_mensaje():
         pass
     return None
 
-# ── Notion ─────────────────────────────────────────────────────────────────────
-def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dolares, plataforma):
+# ── Notion ────────────────────────────────────────────────────────────────────
+def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dolares):
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -114,8 +117,8 @@ def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dol
     data = {
         "parent": {"database_id": NOTION_FONDEO_DB_ID},
         "properties": {
-            "Nombre": {"title": [{"text": {"content": f"LINK Scalping - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]},
-            "PLATAFORMA": {"select": {"name": plataforma}},
+            "Nombre": {"title": [{"text": {"content": f"LINK Turtle - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]},
+            "PLATAFORMA": {"select": {"name": "Fondeo"}},
             "Resultado": {"select": {"name": resultado}},
             "Precio de entradsa": {"number": p_entrada},
             "Precio de salida": {"number": p_salida},
@@ -127,118 +130,198 @@ def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dol
     response = requests.post(url, headers=headers, json=data)
     return response.status_code
 
-# ── Lógica principal ───────────────────────────────────────────────────────────
+# ── Descarga de datos ─────────────────────────────────────────────────────────
+def get_data(interval, period):
+    import yfinance as yf
+    data = yf.download(f"LINK-USD", period=period, interval=interval, progress=False)
+    data = data[['Close', 'High', 'Low', 'Open', 'Volume']]
+    data.columns = ['close', 'high', 'low', 'open', 'volume']
+    close = data['close']
+    data['rsi'] = ta.momentum.RSIIndicator(close, window=14).rsi()
+    bb = ta.volatility.BollingerBands(close, window=20, window_dev=2.0)
+    data['bb_inf'] = bb.bollinger_lband()
+    data['bb_sup'] = bb.bollinger_hband()
+    return data.dropna()
+
+# ── Detección de fakeout ──────────────────────────────────────────────────────
+def detectar_fakeout(data, i):
+    if i < 1:
+        return None
+    high_ant  = float(data['high'].iloc[i-1])
+    low_ant   = float(data['low'].iloc[i-1])
+    high_act  = float(data['high'].iloc[i])
+    low_act   = float(data['low'].iloc[i])
+    close_act = float(data['close'].iloc[i])
+    if high_act > high_ant and close_act < high_ant:
+        return 'SHORT'
+    elif low_act < low_ant and close_act > low_ant:
+        return 'LONG'
+    return None
+
+def get_contexto(data):
+    """Retorna el fakeout de la última vela"""
+    return detectar_fakeout(data, len(data) - 1)
+
+# ── Lógica principal ──────────────────────────────────────────────────────────
 def verificar_senal():
-    global alerta_long_ts, entrada_enviada_ts, salida_enviada_ts
-    global en_operacion, precio_entrada
-    global esperando_confirmacion, alerta_ts_pendiente
-    global banda_inf_tocada_ts, ciclos_esperando
+    global en_operacion, precio_entrada, precio_tp, precio_sl
+    global direccion, esperando_confirmacion, alerta_ts_pendiente
+    global banda_inf_tocada_5m, banda_sup_tocada_5m, ciclos_esperando
 
     try:
-        data = yf.download("LINK-USD", period="1d", interval="1m", progress=False)
-        data = data[['Close', 'High', 'Low', 'Open', 'Volume']]
-        data.columns = ['Close', 'High', 'Low', 'Open', 'Volume']
-        close = data['Close']
+        # Verificar horario de sueño
+        hora_utc = datetime.utcnow().hour
+        dormido = HORA_INICIO_SUENO <= hora_utc < HORA_FIN_SUENO
 
-        rsi = ta.momentum.RSIIndicator(close, window=14).rsi()
-        bb = ta.volatility.BollingerBands(close, window=20, window_dev=2.0)
+        # Descargar datos de los 4 timeframes
+        df_4h  = get_data("4h",  "60d")
+        df_1h  = get_data("1h",  "7d")
+        df_15m = get_data("15m", "5d")
+        df_5m  = get_data("5m",  "2d")
 
-        ts_actual = str(data.index[-1])
-        rsi_actual = float(rsi.iloc[-1])
-        precio_actual = float(close.iloc[-1])
-        banda_inf_actual = float(bb.bollinger_lband().iloc[-1])
+        # Contexto actual de cada timeframe
+        ctx_4h  = get_contexto(df_4h)
+        ctx_1h  = get_contexto(df_1h)
+        ctx_15m = get_contexto(df_15m)
 
-        rsi_anterior = float(rsi.iloc[-2])
-        precio_anterior = float(close.iloc[-2])
-        banda_sup_anterior = float(bb.bollinger_hband().iloc[-2])
-        ts_anterior = str(data.index[-2])
+        # Datos actuales de 5m
+        precio_actual = float(df_5m['close'].iloc[-1])
+        rsi_actual    = float(df_5m['rsi'].iloc[-1])
+        rsi_anterior  = float(df_5m['rsi'].iloc[-2])
+        bb_inf        = float(df_5m['bb_inf'].iloc[-1])
+        bb_sup        = float(df_5m['bb_sup'].iloc[-1])
 
-        if precio_actual <= banda_inf_actual:
-            banda_inf_tocada_ts = ts_actual
-            guardar_estado()
+        if precio_actual <= bb_inf:
+            banda_inf_tocada_5m = True
+        if precio_actual >= bb_sup:
+            banda_sup_tocada_5m = True
 
+        # ── Salida de operación ───────────────────────────────────────────
+        if en_operacion:
+            if direccion == 'LONG' and precio_actual >= precio_tp:
+                porcentaje = ((precio_tp - precio_entrada) / precio_entrada) * 100
+                ganancia = round(POSICION * porcentaje / 100 - COMISION, 2)
+                en_operacion = False
+                guardar_estado()
+                enviar_mensaje(f"✅ SALIDA LONG — TP\nEntrada: ${precio_entrada:.4f} | Salida: ${precio_tp:.4f}\n{porcentaje:.2f}% | ${ganancia:.2f}\n⚡ Cerrar posición AHORA")
+                registrar_operacion("TP", precio_entrada, precio_tp, round(porcentaje, 2), ganancia)
+
+            elif direccion == 'LONG' and precio_actual <= precio_sl:
+                porcentaje = ((precio_sl - precio_entrada) / precio_entrada) * 100
+                ganancia = round(POSICION * porcentaje / 100 - COMISION, 2)
+                en_operacion = False
+                guardar_estado()
+                enviar_mensaje(f"❌ SALIDA LONG — SL\nEntrada: ${precio_entrada:.4f} | Salida: ${precio_sl:.4f}\n{porcentaje:.2f}% | ${ganancia:.2f}\n⚡ Cerrar posición AHORA")
+                registrar_operacion("SL", precio_entrada, precio_sl, round(porcentaje, 2), ganancia)
+
+            elif direccion == 'SHORT' and precio_actual <= precio_tp:
+                porcentaje = ((precio_entrada - precio_tp) / precio_entrada) * 100
+                ganancia = round(POSICION * porcentaje / 100 - COMISION, 2)
+                en_operacion = False
+                guardar_estado()
+                enviar_mensaje(f"✅ SALIDA SHORT — TP\nEntrada: ${precio_entrada:.4f} | Salida: ${precio_tp:.4f}\n{porcentaje:.2f}% | ${ganancia:.2f}\n⚡ Cerrar posición AHORA")
+                registrar_operacion("TP", precio_entrada, precio_tp, round(porcentaje, 2), ganancia)
+
+            elif direccion == 'SHORT' and precio_actual >= precio_sl:
+                porcentaje = ((precio_entrada - precio_sl) / precio_entrada) * 100
+                ganancia = round(POSICION * porcentaje / 100 - COMISION, 2)
+                en_operacion = False
+                guardar_estado()
+                enviar_mensaje(f"❌ SALIDA SHORT — SL\nEntrada: ${precio_entrada:.4f} | Salida: ${precio_sl:.4f}\n{porcentaje:.2f}% | ${ganancia:.2f}\n⚡ Cerrar posición AHORA")
+                registrar_operacion("SL", precio_entrada, precio_sl, round(porcentaje, 2), ganancia)
+            return
+
+        # ── Confirmación pendiente ────────────────────────────────────────
         if esperando_confirmacion:
-            mensaje_usuario = obtener_ultimo_mensaje()
-            if mensaje_usuario == "si":
+            mensaje = obtener_ultimo_mensaje()
+            if mensaje == "si":
                 esperando_confirmacion = False
                 ciclos_esperando = 0
-                precio_entrada = precio_actual
                 en_operacion = True
-                salida_enviada_ts = None
                 guardar_estado()
-                mensaje = f"🟢 ENTRADA SCALPING LONG 📈\n"
-                mensaje += f"Precio: ${precio_entrada:.4f}\n"
-                mensaje += f"⚡ Entrar con 50x en Bybit\n"
-                mensaje += f"⚡ Margen: $500 | Posicion: $25,000"
-                enviar_mensaje(mensaje)
-                return
+                dir_txt = "LONG 📈" if direccion == 'LONG' else "SHORT 📉"
+                enviar_mensaje(f"🟢 ENTRADA CONFIRMADA — {dir_txt}\nPrecio: ${precio_entrada:.4f}\nTP: ${precio_tp:.4f} | SL: ${precio_sl:.4f}\n⚡ Entrar con $1,000 margen 50x en Bybit")
             else:
                 ciclos_esperando += 1
                 guardar_estado()
                 if ciclos_esperando >= CICLOS_MAX_ESPERA:
                     esperando_confirmacion = False
                     ciclos_esperando = 0
-                    alerta_ts_pendiente = None
                     guardar_estado()
-                    enviar_mensaje("⏱️ Señal scalping cancelada por tiempo (3 min sin respuesta)")
+                    enviar_mensaje("⏱️ Señal cancelada por tiempo (3 min sin respuesta)")
+            return
 
-        if not en_operacion and not esperando_confirmacion:
-            if precio_actual <= banda_inf_actual and rsi_actual <= 30:
-                if alerta_long_ts != ts_actual:
-                    mensaje = f"⚠️ SCALPING ALERTA LONG 📈\n"
-                    mensaje += f"RSI: {rsi_actual:.2f} tocó 30\n"
-                    mensaje += f"Precio: ${precio_actual:.4f} tocó banda inferior\n"
-                    mensaje += f"Esperá cruce RSI hacia arriba"
-                    enviar_mensaje(mensaje)
-                    alerta_long_ts = ts_actual
+        # ── Verificar confluencia ─────────────────────────────────────────
+        if dormido:
+            return
 
-            if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada_ts is not None:
-                if entrada_enviada_ts != ts_actual:
-                    esperando_confirmacion = True
-                    ciclos_esperando = 0
-                    alerta_ts_pendiente = ts_actual
-                    entrada_enviada_ts = ts_actual
-                    guardar_estado()
-                    mensaje = f"🟢 SCALPING ENTRADA LONG 📈\n"
-                    mensaje += f"RSI cruzó hacia arriba 30\n"
-                    mensaje += f"RSI: {rsi_anterior:.2f} → {rsi_actual:.2f}\n"
-                    mensaje += f"Precio: ${precio_actual:.4f}\n"
-                    mensaje += f"Respondé 'si' para entrar"
-                    enviar_mensaje(mensaje)
+        confluencia = (ctx_4h is not None and
+                       ctx_1h is not None and
+                       ctx_15m is not None and
+                       ctx_4h == ctx_1h == ctx_15m)
 
-        if en_operacion and salida_enviada_ts != ts_anterior:
-            if rsi_anterior >= 70 and precio_anterior >= banda_sup_anterior:
-                precio_salida = precio_actual
-                porcentaje = ((precio_salida - precio_entrada) / precio_entrada) * 100
-                resultado = "TP" if porcentaje > 0 else "SL"
-                comision = 25000 * 0.0011
-                ganancia_dolares = round(100000 * porcentaje / 100 - comision, 2)
-                en_operacion = False
-                salida_enviada_ts = ts_anterior
-                banda_inf_tocada_ts = None
+        if not confluencia:
+            # Alerta temprana — 2 de 3 alineados
+            ctxs = [c for c in [ctx_4h, ctx_1h, ctx_15m] if c is not None]
+            if len(ctxs) == 2 and ctxs[0] == ctxs[1]:
+                dir_alerta = ctxs[0]
+                banda_ok = (dir_alerta == 'LONG' and banda_inf_tocada_5m) or \
+                           (dir_alerta == 'SHORT' and banda_sup_tocada_5m)
+                if banda_ok:
+                    enviar_mensaje(f"⚠️ ALERTA TEMPRANA — {dir_alerta}\n2 de 3 timeframes alineados\nPreparate en Bybit, señal próxima")
+            return
+
+        dir_ctx = ctx_4h
+
+        # ── Señal de entrada LONG ─────────────────────────────────────────
+        if dir_ctx == 'LONG' and not en_operacion:
+            if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada_5m:
+                precio_entrada = precio_actual
+                precio_tp      = precio_entrada * (1 + TP_PCT)
+                precio_sl      = precio_entrada * (1 - SL_PCT)
+                direccion      = 'LONG'
+                esperando_confirmacion = True
+                ciclos_esperando = 0
+                banda_inf_tocada_5m = False
                 guardar_estado()
+                enviar_mensaje(
+                    f"🟢 SEÑAL LONG — Triple Turtle Soap 📈\n"
+                    f"4H: {ctx_4h} | 1H: {ctx_1h} | 15m: {ctx_15m}\n"
+                    f"Precio: ${precio_entrada:.4f}\n"
+                    f"TP: ${precio_tp:.4f} (+1%)\n"
+                    f"SL: ${precio_sl:.4f} (-3%)\n"
+                    f"⚡ Respondé 'si' para confirmar (3 min)"
+                )
 
-                mensaje = f"🔴 SCALPING SALIDA LONG - {resultado}\n"
-                mensaje += f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_salida:.4f}\n"
-                mensaje += f"Resultado: {porcentaje:.2f}% | Fondeo: ${ganancia_dolares:.2f}\n"
-                mensaje += f"⚡ Cerrar posicion AHORA"
-                enviar_mensaje(mensaje)
-
-                status = registrar_operacion(resultado, precio_entrada, precio_salida, round(porcentaje, 2), ganancia_dolares, "Fondeo")
-                if status == 200:
-                    enviar_mensaje(f"✅ Operacion registrada en Notion")
-                else:
-                    enviar_mensaje(f"⚠️ Error Notion: {status}")
+        # ── Señal de entrada SHORT ────────────────────────────────────────
+        elif dir_ctx == 'SHORT' and not en_operacion:
+            if rsi_anterior >= 70 and rsi_actual < 70 and banda_sup_tocada_5m:
+                precio_entrada = precio_actual
+                precio_tp      = precio_entrada * (1 - TP_PCT)
+                precio_sl      = precio_entrada * (1 + SL_PCT)
+                direccion      = 'SHORT'
+                esperando_confirmacion = True
+                ciclos_esperando = 0
+                banda_sup_tocada_5m = False
+                guardar_estado()
+                enviar_mensaje(
+                    f"🔴 SEÑAL SHORT — Triple Turtle Soap 📉\n"
+                    f"4H: {ctx_4h} | 1H: {ctx_1h} | 15m: {ctx_15m}\n"
+                    f"Precio: ${precio_entrada:.4f}\n"
+                    f"TP: ${precio_tp:.4f} (-1%)\n"
+                    f"SL: ${precio_sl:.4f} (+3%)\n"
+                    f"⚡ Respondé 'si' para confirmar (3 min)"
+                )
 
     except Exception as e:
-        enviar_mensaje(f"⚠️ Error bot scalping: {str(e)}")
+        enviar_mensaje(f"⚠️ Error bot turtle: {str(e)}")
 
-# ── Arranque ───────────────────────────────────────────────────────────────────
+# ── Arranque ──────────────────────────────────────────────────────────────────
 obtener_ultimo_mensaje()
 cargar_estado()
 
 while True:
     now = datetime.now()
-    print(f"{now.strftime('%H:%M:%S')} - Scalping verificando...")
+    print(f"{now.strftime('%H:%M:%S')} - Turtle verificando...")
     verificar_senal()
     time.sleep(30)
