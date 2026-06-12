@@ -18,61 +18,56 @@ ESTADO_FILE = "estado_link.json"
 HORA_INICIO_SUENO = 2
 HORA_FIN_SUENO = 10
 
-alerta_long_ts = None
-entrada_enviada_ts = None
-salida_enviada_ts = None
+# Estado
 en_operacion = False
 precio_entrada = 0
+direccion = None
 esperando_confirmacion = False
-alerta_ts_pendiente = None
 ultimo_update_id = None
-banda_inf_tocada_ts = None
+banda_inf_tocada = False
+banda_sup_tocada = False
+ciclos_esperando = 0
+alerta_temprana_ctx = None
+CICLOS_MAX_ESPERA = 3  # 3 minutos (3 x 60s)
 
 def guardar_estado():
     estado = {
         "en_operacion": en_operacion,
         "precio_entrada": precio_entrada,
+        "direccion": direccion,
         "esperando_confirmacion": esperando_confirmacion,
-        "banda_inf_tocada_ts": str(banda_inf_tocada_ts) if banda_inf_tocada_ts is not None else None,
-        "alerta_ts_pendiente": str(alerta_ts_pendiente) if alerta_ts_pendiente is not None else None,
-        "entrada_enviada_ts": str(entrada_enviada_ts) if entrada_enviada_ts is not None else None,
-        "salida_enviada_ts": str(salida_enviada_ts) if salida_enviada_ts is not None else None,
         "ultimo_update_id": ultimo_update_id,
+        "ciclos_esperando": ciclos_esperando,
+        "alerta_temprana_ctx": alerta_temprana_ctx
     }
     with open(ESTADO_FILE, "w") as f:
         json.dump(estado, f)
 
 def cargar_estado():
-    global en_operacion, precio_entrada, esperando_confirmacion
-    global banda_inf_tocada_ts, alerta_ts_pendiente
-    global entrada_enviada_ts, salida_enviada_ts, ultimo_update_id
-
+    global en_operacion, precio_entrada, direccion
+    global esperando_confirmacion, ultimo_update_id
+    global ciclos_esperando, alerta_temprana_ctx
     if not os.path.exists(ESTADO_FILE):
         return
-
     try:
         with open(ESTADO_FILE, "r") as f:
             estado = json.load(f)
-
-        en_operacion = estado.get("en_operacion", False)
-        precio_entrada = estado.get("precio_entrada", 0)
+        en_operacion           = estado.get("en_operacion", False)
+        precio_entrada         = estado.get("precio_entrada", 0)
+        direccion              = estado.get("direccion", None)
         esperando_confirmacion = estado.get("esperando_confirmacion", False)
-        ultimo_update_id = estado.get("ultimo_update_id", None)
-        banda_inf_tocada_ts = estado.get("banda_inf_tocada_ts", None)
-        alerta_ts_pendiente = estado.get("alerta_ts_pendiente", None)
-        entrada_enviada_ts = estado.get("entrada_enviada_ts", None)
-        salida_enviada_ts = estado.get("salida_enviada_ts", None)
-
+        ultimo_update_id       = estado.get("ultimo_update_id", None)
+        ciclos_esperando       = estado.get("ciclos_esperando", 0)
+        alerta_temprana_ctx    = estado.get("alerta_temprana_ctx", None)
         if en_operacion:
-            enviar_mensaje(f"🔄 Bot reiniciado con operación abierta\nPrecio de entrada: ${precio_entrada:.4f}\nMonitoreando salida...")
+            enviar_mensaje(f"🔄 Bot reiniciado con operación abierta\n{direccion} desde ${precio_entrada:.4f}")
         elif esperando_confirmacion:
             esperando_confirmacion = False
-            alerta_ts_pendiente = None
+            ciclos_esperando = 0
             guardar_estado()
-            enviar_mensaje("🔄 Bot reiniciado — señal pendiente cancelada, esperando nueva oportunidad")
+            enviar_mensaje("🔄 Bot reiniciado — señal pendiente cancelada")
         else:
-            enviar_mensaje("🔄 Bot actualizado con filtro de horario de sueño")
-
+            enviar_mensaje("🤖 Bot Link Triple Turtle iniciado")
     except Exception as e:
         enviar_mensaje(f"⚠️ Error cargando estado: {str(e)}")
 
@@ -80,7 +75,10 @@ def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     for chat in [CHAT_ID, CHAT_ID_AMIGO]:
         params = {"chat_id": chat, "text": texto}
-        requests.get(url, params=params)
+        try:
+            requests.get(url, params=params)
+        except:
+            pass
 
 def obtener_ultimo_mensaje():
     global ultimo_update_id
@@ -109,7 +107,7 @@ def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dol
     data = {
         "parent": {"database_id": NOTION_FONDEO_DB_ID},
         "properties": {
-            "Nombre": {"title": [{"text": {"content": f"LINK - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]},
+            "Nombre": {"title": [{"text": {"content": f"LINK Turtle - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]},
             "PLATAFORMA": {"select": {"name": plataforma}},
             "Resultado": {"select": {"name": resultado}},
             "Precio de entradsa": {"number": p_entrada},
@@ -119,121 +117,218 @@ def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dol
             "Fecha": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}}
         }
     }
-    response = requests.post(url, headers=headers, json=data)
-    return response.status_code
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        return response.status_code
+    except:
+        return 0
+
+def get_data(interval, period):
+    try:
+        data = yf.download("LINK-USD", period=period, interval=interval, progress=False)
+        if data is None or len(data) < 20:
+            return None
+        data = data[['Close', 'High', 'Low', 'Open', 'Volume']]
+        data.columns = ['close', 'high', 'low', 'open', 'volume']
+        close = data['close']
+        data['rsi'] = ta.momentum.RSIIndicator(close, window=14).rsi()
+        bb = ta.volatility.BollingerBands(close, window=20, window_dev=2.0)
+        data['bb_inf'] = bb.bollinger_lband()
+        data['bb_sup'] = bb.bollinger_hband()
+        result = data.dropna()
+        if len(result) < 2:
+            return None
+        return result
+    except:
+        return None
+
+def get_contexto(data):
+    if data is None or len(data) < 2:
+        return None
+    high_ant  = float(data['high'].iloc[-2])
+    low_ant   = float(data['low'].iloc[-2])
+    high_act  = float(data['high'].iloc[-1])
+    low_act   = float(data['low'].iloc[-1])
+    close_act = float(data['close'].iloc[-1])
+    if high_act > high_ant and close_act < high_ant:
+        return 'SHORT'
+    elif low_act < low_ant and close_act > low_ant:
+        return 'LONG'
+    return None
 
 def verificar_senal():
-    global alerta_long_ts, entrada_enviada_ts, salida_enviada_ts
-    global en_operacion, precio_entrada
-    global esperando_confirmacion, alerta_ts_pendiente
-    global banda_inf_tocada_ts
+    global en_operacion, precio_entrada, direccion
+    global esperando_confirmacion, ciclos_esperando
+    global banda_inf_tocada, banda_sup_tocada, alerta_temprana_ctx
 
     try:
-        # Verificar horario de sueño
         hora_utc = datetime.utcnow().hour
         dormido = HORA_INICIO_SUENO <= hora_utc < HORA_FIN_SUENO
 
-        data = yf.download("LINK-USD", period="5d", interval="15m", progress=False)
-        data = data[['Close', 'High', 'Low', 'Open', 'Volume']]
-        data.columns = ['Close', 'High', 'Low', 'Open', 'Volume']
-        close = data['Close']
+        df_4h  = get_data("4h",  "60d")
+        df_1h  = get_data("1h",  "7d")
+        df_15m = get_data("15m", "5d")
+        df_5m  = get_data("5m",  "2d")
 
-        rsi = ta.momentum.RSIIndicator(close, window=14).rsi()
-        bb = ta.volatility.BollingerBands(close, window=20, window_dev=2.0)
+        if df_5m is None:
+            return
 
-        ts_actual = str(data.index[-1])
-        rsi_actual = float(rsi.iloc[-1])
-        precio_actual = float(close.iloc[-1])
-        banda_inf_actual = float(bb.bollinger_lband().iloc[-1])
+        ctx_4h  = get_contexto(df_4h)
+        ctx_1h  = get_contexto(df_1h)
+        ctx_15m = get_contexto(df_15m)
 
-        rsi_anterior = float(rsi.iloc[-2])
-        precio_anterior = float(close.iloc[-2])
-        banda_sup_anterior = float(bb.bollinger_hband().iloc[-2])
-        ts_anterior = str(data.index[-2])
+        precio_actual   = float(df_5m['close'].iloc[-1])
+        rsi_actual      = float(df_5m['rsi'].iloc[-1])
+        rsi_anterior    = float(df_5m['rsi'].iloc[-2])
+        precio_anterior = float(df_5m['close'].iloc[-2])
+        bb_inf          = float(df_5m['bb_inf'].iloc[-1])
+        bb_sup          = float(df_5m['bb_sup'].iloc[-1])
+        bb_inf_ant      = float(df_5m['bb_inf'].iloc[-2])
+        bb_sup_ant      = float(df_5m['bb_sup'].iloc[-2])
 
-        if precio_actual <= banda_inf_actual:
-            banda_inf_tocada_ts = ts_actual
-            guardar_estado()
+        if precio_actual <= bb_inf:
+            banda_inf_tocada = True
+        if precio_actual >= bb_sup:
+            banda_sup_tocada = True
 
+        # ── Salida natural (siempre activa, incluso durmiendo) ────────────
+        if en_operacion:
+            if direccion == 'LONG':
+                if rsi_anterior >= 70 and precio_anterior >= bb_sup_ant:
+                    porcentaje = ((precio_actual - precio_entrada) / precio_entrada) * 100
+                    resultado = "TP" if porcentaje > 0 else "SL"
+                    ganancia = round(50000 * porcentaje / 100, 2)
+                    en_operacion = False
+                    alerta_temprana_ctx = None
+                    guardar_estado()
+                    enviar_mensaje(
+                        f"{'✅' if resultado=='TP' else '❌'} SALIDA LONG — {resultado}\n"
+                        f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_actual:.4f}\n"
+                        f"{porcentaje:.2f}% | ${ganancia:.2f}\n"
+                        f"⚡ Cerrar posición en Quantfury AHORA"
+                    )
+                    registrar_operacion(resultado, precio_entrada, precio_actual,
+                                       round(porcentaje, 2), ganancia, "Quantfury")
+            elif direccion == 'SHORT':
+                if rsi_anterior <= 30 and precio_anterior <= bb_inf_ant:
+                    porcentaje = ((precio_entrada - precio_actual) / precio_entrada) * 100
+                    resultado = "TP" if porcentaje > 0 else "SL"
+                    ganancia = round(50000 * porcentaje / 100, 2)
+                    en_operacion = False
+                    alerta_temprana_ctx = None
+                    guardar_estado()
+                    enviar_mensaje(
+                        f"{'✅' if resultado=='TP' else '❌'} SALIDA SHORT — {resultado}\n"
+                        f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_actual:.4f}\n"
+                        f"{porcentaje:.2f}% | ${ganancia:.2f}\n"
+                        f"⚡ Cerrar posición en Quantfury AHORA"
+                    )
+                    registrar_operacion(resultado, precio_entrada, precio_actual,
+                                       round(porcentaje, 2), ganancia, "Quantfury")
+            return
+
+        # ── Confirmación pendiente ────────────────────────────────────────
         if esperando_confirmacion:
-            mensaje_usuario = obtener_ultimo_mensaje()
-            if mensaje_usuario == "si":
+            mensaje = obtener_ultimo_mensaje()
+            if mensaje == "si":
                 esperando_confirmacion = False
-                precio_entrada = precio_actual
+                ciclos_esperando = 0
                 en_operacion = True
-                salida_enviada_ts = None
+                alerta_temprana_ctx = None
                 guardar_estado()
-                mensaje = f"🟢 ENTRADA CONFIRMADA - LONG 📈\n"
-                mensaje += f"Precio de entrada: ${precio_entrada:.4f}\n"
-                mensaje += f"⚡ Entrar con 30% del Trading Power en Quantfury"
-                enviar_mensaje(mensaje)
-                return
-            elif ts_actual != alerta_ts_pendiente and ts_anterior != alerta_ts_pendiente:
-                esperando_confirmacion = False
-                alerta_ts_pendiente = None
+                dir_txt = "LONG 📈" if direccion == 'LONG' else "SHORT 📉"
+                enviar_mensaje(
+                    f"🟢 ENTRADA CONFIRMADA — {dir_txt}\n"
+                    f"Precio: ${precio_entrada:.4f}\n"
+                    f"⚡ Entrar con 30% del Trading Power en Quantfury\n"
+                    f"Salida natural — esperá señal de salida"
+                )
+            else:
+                ciclos_esperando += 1
                 guardar_estado()
+                if ciclos_esperando >= CICLOS_MAX_ESPERA:
+                    esperando_confirmacion = False
+                    ciclos_esperando = 0
+                    alerta_temprana_ctx = None
+                    guardar_estado()
+                    enviar_mensaje("⏱️ Señal Quantfury cancelada por tiempo")
+            return
 
-        # Salida — siempre activa aunque esté durmiendo
-        if en_operacion and salida_enviada_ts != ts_anterior:
-            if rsi_anterior >= 70 and precio_anterior >= banda_sup_anterior:
-                precio_salida = precio_actual
-                porcentaje = ((precio_salida - precio_entrada) / precio_entrada) * 100
-                resultado = "TP" if porcentaje > 0 else "SL"
-                ganancia_dolares = round(50000 * porcentaje / 100, 2)
-                en_operacion = False
-                salida_enviada_ts = ts_anterior
-                banda_inf_tocada_ts = None
-                guardar_estado()
-
-                mensaje = f"🔴 SALIDA LONG - {resultado}\n"
-                mensaje += f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_salida:.4f}\n"
-                mensaje += f"Resultado: {porcentaje:.2f}% | Fondeo: ${ganancia_dolares:.2f}\n"
-                mensaje += f"⚡ Cerrar posicion AHORA"
-                enviar_mensaje(mensaje)
-
-                status = registrar_operacion(resultado, precio_entrada, precio_salida,
-                                             round(porcentaje, 2), ganancia_dolares, "Quantfury")
-                if status == 200:
-                    enviar_mensaje(f"✅ Operacion registrada en Notion")
-                else:
-                    enviar_mensaje(f"⚠️ Error Notion: {status}")
-                return
-
-        # Entradas — solo si no está durmiendo
         if dormido:
             return
 
-        if not en_operacion and not esperando_confirmacion:
-            if precio_actual <= banda_inf_actual and rsi_actual <= 30:
-                if alerta_long_ts != ts_actual:
-                    mensaje = f"⚠️ ALERTA TEMPRANA - LONG 📈\n"
-                    mensaje += f"RSI: {rsi_actual:.2f} tocó 30\n"
-                    mensaje += f"Precio: ${precio_actual:.4f} tocó banda inferior\n"
-                    mensaje += f"Esperá que el RSI cruce hacia arriba para entrar"
-                    enviar_mensaje(mensaje)
-                    alerta_long_ts = ts_actual
+        # ── Verificar confluencia ─────────────────────────────────────────
+        confluencia = (ctx_4h is not None and
+                       ctx_1h is not None and
+                       ctx_15m is not None and
+                       ctx_4h == ctx_1h == ctx_15m)
 
-            if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada_ts is not None:
-                if entrada_enviada_ts != ts_actual:
-                    esperando_confirmacion = True
-                    alerta_ts_pendiente = ts_actual
-                    entrada_enviada_ts = ts_actual
-                    guardar_estado()
-                    mensaje = f"🟢 SEÑAL ENTRADA LONG 📈\n"
-                    mensaje += f"RSI cruzó hacia arriba 30\n"
-                    mensaje += f"RSI: {rsi_anterior:.2f} → {rsi_actual:.2f}\n"
-                    mensaje += f"Precio: ${precio_actual:.4f}\n"
-                    mensaje += f"Respondé 'si' para confirmar entrada"
-                    enviar_mensaje(mensaje)
+        if not confluencia:
+            alerta_temprana_ctx = None
+            guardar_estado()
+            return
+
+        dir_ctx = ctx_4h
+
+        # ── Alerta temprana — una sola vez ────────────────────────────────
+        banda_tocada = (dir_ctx == 'LONG' and banda_inf_tocada) or \
+                       (dir_ctx == 'SHORT' and banda_sup_tocada)
+
+        if banda_tocada and alerta_temprana_ctx != dir_ctx:
+            alerta_temprana_ctx = dir_ctx
+            guardar_estado()
+            banda_txt = "banda inferior" if dir_ctx == 'LONG' else "banda superior"
+            enviar_mensaje(
+                f"⚠️ ALERTA TEMPRANA — {dir_ctx} {'📈' if dir_ctx=='LONG' else '📉'}\n"
+                f"3 timeframes alineados (4H+1H+15m)\n"
+                f"Precio tocó {banda_txt} en 5m\n"
+                f"Esperá cruce del RSI — prepará Quantfury"
+            )
+
+        # ── Señal LONG ────────────────────────────────────────────────────
+        if dir_ctx == 'LONG' and not en_operacion:
+            if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada:
+                precio_entrada   = precio_actual
+                direccion        = 'LONG'
+                esperando_confirmacion = True
+                ciclos_esperando = 0
+                banda_inf_tocada = False
+                alerta_temprana_ctx = None
+                guardar_estado()
+                enviar_mensaje(
+                    f"🟢 SEÑAL LONG — Triple Turtle 📈\n"
+                    f"4H: {ctx_4h} | 1H: {ctx_1h} | 15m: {ctx_15m}\n"
+                    f"Precio: ${precio_entrada:.4f}\n"
+                    f"Salida: natural (RSI+Bollinger)\n"
+                    f"⚡ Respondé 'si' para confirmar (3 min)"
+                )
+
+        # ── Señal SHORT ───────────────────────────────────────────────────
+        elif dir_ctx == 'SHORT' and not en_operacion:
+            if rsi_anterior >= 70 and rsi_actual < 70 and banda_sup_tocada:
+                precio_entrada   = precio_actual
+                direccion        = 'SHORT'
+                esperando_confirmacion = True
+                ciclos_esperando = 0
+                banda_sup_tocada = False
+                alerta_temprana_ctx = None
+                guardar_estado()
+                enviar_mensaje(
+                    f"🔴 SEÑAL SHORT — Triple Turtle 📉\n"
+                    f"4H: {ctx_4h} | 1H: {ctx_1h} | 15m: {ctx_15m}\n"
+                    f"Precio: ${precio_entrada:.4f}\n"
+                    f"Salida: natural (RSI+Bollinger)\n"
+                    f"⚡ Respondé 'si' para confirmar (3 min)"
+                )
 
     except Exception as e:
-        enviar_mensaje(f"⚠️ Error: {str(e)}")
+        enviar_mensaje(f"⚠️ Error bot link: {str(e)}")
 
 obtener_ultimo_mensaje()
 cargar_estado()
 
 while True:
     now = datetime.now()
-    print(f"{now.strftime('%H:%M:%S')} - Verificando...")
+    print(f"{now.strftime('%H:%M:%S')} - Link verificando...")
     verificar_senal()
     time.sleep(60)
