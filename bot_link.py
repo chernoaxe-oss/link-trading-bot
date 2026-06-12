@@ -14,7 +14,10 @@ NOTION_TOKEN = "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"
 NOTION_FONDEO_DB_ID = "3799d658-98f4-8053-9868-f003b846e5d7"
 ESTADO_FILE = "estado_link.json"
 
-# ── Estado en memoria ──────────────────────────────────────────────────────────
+# Horario de sueño UTC (23:00-07:00 AR = 02:00-10:00 UTC)
+HORA_INICIO_SUENO = 2
+HORA_FIN_SUENO = 10
+
 alerta_long_ts = None
 entrada_enviada_ts = None
 salida_enviada_ts = None
@@ -25,7 +28,6 @@ alerta_ts_pendiente = None
 ultimo_update_id = None
 banda_inf_tocada_ts = None
 
-# ── Persistencia de estado ─────────────────────────────────────────────────────
 def guardar_estado():
     estado = {
         "en_operacion": en_operacion,
@@ -56,8 +58,6 @@ def cargar_estado():
         precio_entrada = estado.get("precio_entrada", 0)
         esperando_confirmacion = estado.get("esperando_confirmacion", False)
         ultimo_update_id = estado.get("ultimo_update_id", None)
-
-        # Los timestamps se guardan como string, los dejamos como string para comparar
         banda_inf_tocada_ts = estado.get("banda_inf_tocada_ts", None)
         alerta_ts_pendiente = estado.get("alerta_ts_pendiente", None)
         entrada_enviada_ts = estado.get("entrada_enviada_ts", None)
@@ -66,18 +66,16 @@ def cargar_estado():
         if en_operacion:
             enviar_mensaje(f"🔄 Bot reiniciado con operación abierta\nPrecio de entrada: ${precio_entrada:.4f}\nMonitoreando salida...")
         elif esperando_confirmacion:
-            # Si estaba esperando confirmacion y reinició, cancelamos para no quedar colgado
             esperando_confirmacion = False
             alerta_ts_pendiente = None
             guardar_estado()
             enviar_mensaje("🔄 Bot reiniciado — señal pendiente cancelada, esperando nueva oportunidad")
         else:
-            enviar_mensaje("🔄 Bot reiniciado — sin operación abierta")
+            enviar_mensaje("🔄 Bot actualizado con filtro de horario de sueño")
 
     except Exception as e:
         enviar_mensaje(f"⚠️ Error cargando estado: {str(e)}")
 
-# ── Telegram ───────────────────────────────────────────────────────────────────
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     for chat in [CHAT_ID, CHAT_ID_AMIGO]:
@@ -101,7 +99,6 @@ def obtener_ultimo_mensaje():
         pass
     return None
 
-# ── Notion ─────────────────────────────────────────────────────────────────────
 def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dolares, plataforma):
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -125,7 +122,6 @@ def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dol
     response = requests.post(url, headers=headers, json=data)
     return response.status_code
 
-# ── Lógica principal ───────────────────────────────────────────────────────────
 def verificar_senal():
     global alerta_long_ts, entrada_enviada_ts, salida_enviada_ts
     global en_operacion, precio_entrada
@@ -133,6 +129,10 @@ def verificar_senal():
     global banda_inf_tocada_ts
 
     try:
+        # Verificar horario de sueño
+        hora_utc = datetime.utcnow().hour
+        dormido = HORA_INICIO_SUENO <= hora_utc < HORA_FIN_SUENO
+
         data = yf.download("LINK-USD", period="5d", interval="15m", progress=False)
         data = data[['Close', 'High', 'Low', 'Open', 'Volume']]
         data.columns = ['Close', 'High', 'Low', 'Open', 'Volume']
@@ -173,6 +173,36 @@ def verificar_senal():
                 alerta_ts_pendiente = None
                 guardar_estado()
 
+        # Salida — siempre activa aunque esté durmiendo
+        if en_operacion and salida_enviada_ts != ts_anterior:
+            if rsi_anterior >= 70 and precio_anterior >= banda_sup_anterior:
+                precio_salida = precio_actual
+                porcentaje = ((precio_salida - precio_entrada) / precio_entrada) * 100
+                resultado = "TP" if porcentaje > 0 else "SL"
+                ganancia_dolares = round(50000 * porcentaje / 100, 2)
+                en_operacion = False
+                salida_enviada_ts = ts_anterior
+                banda_inf_tocada_ts = None
+                guardar_estado()
+
+                mensaje = f"🔴 SALIDA LONG - {resultado}\n"
+                mensaje += f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_salida:.4f}\n"
+                mensaje += f"Resultado: {porcentaje:.2f}% | Fondeo: ${ganancia_dolares:.2f}\n"
+                mensaje += f"⚡ Cerrar posicion AHORA"
+                enviar_mensaje(mensaje)
+
+                status = registrar_operacion(resultado, precio_entrada, precio_salida,
+                                             round(porcentaje, 2), ganancia_dolares, "Quantfury")
+                if status == 200:
+                    enviar_mensaje(f"✅ Operacion registrada en Notion")
+                else:
+                    enviar_mensaje(f"⚠️ Error Notion: {status}")
+                return
+
+        # Entradas — solo si no está durmiendo
+        if dormido:
+            return
+
         if not en_operacion and not esperando_confirmacion:
             if precio_actual <= banda_inf_actual and rsi_actual <= 30:
                 if alerta_long_ts != ts_actual:
@@ -196,33 +226,9 @@ def verificar_senal():
                     mensaje += f"Respondé 'si' para confirmar entrada"
                     enviar_mensaje(mensaje)
 
-        if en_operacion and salida_enviada_ts != ts_anterior:
-            if rsi_anterior >= 70 and precio_anterior >= banda_sup_anterior:
-                precio_salida = precio_actual
-                porcentaje = ((precio_salida - precio_entrada) / precio_entrada) * 100
-                resultado = "TP" if porcentaje > 0 else "SL"
-                ganancia_dolares = round(50000 * porcentaje / 100, 2)
-                en_operacion = False
-                salida_enviada_ts = ts_anterior
-                banda_inf_tocada_ts = None
-                guardar_estado()
-
-                mensaje = f"🔴 SALIDA LONG - {resultado}\n"
-                mensaje += f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_salida:.4f}\n"
-                mensaje += f"Resultado: {porcentaje:.2f}% | Fondeo: ${ganancia_dolares:.2f}\n"
-                mensaje += f"⚡ Cerrar posicion AHORA"
-                enviar_mensaje(mensaje)
-
-                status = registrar_operacion(resultado, precio_entrada, precio_salida, round(porcentaje, 2), ganancia_dolares, "Quantfury")
-                if status == 200:
-                    enviar_mensaje(f"✅ Operacion registrada en Notion")
-                else:
-                    enviar_mensaje(f"⚠️ Error Notion: {status}")
-
     except Exception as e:
         enviar_mensaje(f"⚠️ Error: {str(e)}")
 
-# ── Arranque ───────────────────────────────────────────────────────────────────
 obtener_ultimo_mensaje()
 cargar_estado()
 
