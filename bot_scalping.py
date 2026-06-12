@@ -18,12 +18,11 @@ ESTADO_FILE = "estado_turtle.json"
 SYMBOL = "LINK-USD"
 MARGEN = 1000
 APALANCAMIENTO = 50
-POSICION = MARGEN * APALANCAMIENTO  # $50,000
+POSICION = MARGEN * APALANCAMIENTO
 TP_PCT = 0.01
 SL_PCT = 0.03
 COMISION = POSICION * 0.0011
 
-# Horario de sueño UTC (23:00-07:00 AR = 02:00-10:00 UTC)
 HORA_INICIO_SUENO = 2
 HORA_FIN_SUENO = 10
 
@@ -38,7 +37,8 @@ ultimo_update_id = None
 banda_inf_tocada_5m = False
 banda_sup_tocada_5m = False
 ciclos_esperando = 0
-CICLOS_MAX_ESPERA = 6  # 3 minutos (6 x 30s)
+CICLOS_MAX_ESPERA = 6
+alerta_temprana_ctx = None  # contexto para el que ya se mandó alerta
 
 def guardar_estado():
     estado = {
@@ -49,14 +49,16 @@ def guardar_estado():
         "direccion": direccion,
         "esperando_confirmacion": esperando_confirmacion,
         "ultimo_update_id": ultimo_update_id,
-        "ciclos_esperando": ciclos_esperando
+        "ciclos_esperando": ciclos_esperando,
+        "alerta_temprana_ctx": alerta_temprana_ctx
     }
     with open(ESTADO_FILE, "w") as f:
         json.dump(estado, f)
 
 def cargar_estado():
     global en_operacion, precio_entrada, precio_tp, precio_sl
-    global direccion, esperando_confirmacion, ultimo_update_id, ciclos_esperando
+    global direccion, esperando_confirmacion, ultimo_update_id
+    global ciclos_esperando, alerta_temprana_ctx
     if not os.path.exists(ESTADO_FILE):
         return
     try:
@@ -70,6 +72,7 @@ def cargar_estado():
         esperando_confirmacion = estado.get("esperando_confirmacion", False)
         ultimo_update_id       = estado.get("ultimo_update_id", None)
         ciclos_esperando       = estado.get("ciclos_esperando", 0)
+        alerta_temprana_ctx    = estado.get("alerta_temprana_ctx", None)
         if en_operacion:
             enviar_mensaje(f"🔄 Bot reiniciado con operación abierta\n{direccion} a ${precio_entrada:.4f}\nTP: ${precio_tp:.4f} | SL: ${precio_sl:.4f}")
         elif esperando_confirmacion:
@@ -153,7 +156,7 @@ def get_data(interval, period):
         if len(result) < 2:
             return None
         return result
-    except Exception as e:
+    except:
         return None
 
 # ── Detección de fakeout ──────────────────────────────────────────────────────
@@ -180,29 +183,25 @@ def get_contexto(data):
 def verificar_senal():
     global en_operacion, precio_entrada, precio_tp, precio_sl
     global direccion, esperando_confirmacion
-    global banda_inf_tocada_5m, banda_sup_tocada_5m, ciclos_esperando
+    global banda_inf_tocada_5m, banda_sup_tocada_5m
+    global ciclos_esperando, alerta_temprana_ctx
 
     try:
-        # Verificar horario de sueño
         hora_utc = datetime.now(timezone.utc).hour
         dormido = HORA_INICIO_SUENO <= hora_utc < HORA_FIN_SUENO
 
-        # Descargar datos
         df_4h  = get_data("4h",  "60d")
         df_1h  = get_data("1h",  "7d")
         df_15m = get_data("15m", "5d")
         df_5m  = get_data("5m",  "2d")
 
         if df_5m is None:
-            enviar_mensaje("⚠️ Error descargando datos de 5m")
             return
 
-        # Contextos
         ctx_4h  = get_contexto(df_4h)
         ctx_1h  = get_contexto(df_1h)
         ctx_15m = get_contexto(df_15m)
 
-        # Datos actuales 5m
         precio_actual = float(df_5m['close'].iloc[-1])
         rsi_actual    = float(df_5m['rsi'].iloc[-1])
         rsi_anterior  = float(df_5m['rsi'].iloc[-2])
@@ -220,6 +219,7 @@ def verificar_senal():
                 porcentaje = ((precio_tp - precio_entrada) / precio_entrada) * 100
                 ganancia = round(POSICION * porcentaje / 100 - COMISION, 2)
                 en_operacion = False
+                alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(f"✅ SALIDA LONG — TP\nEntrada: ${precio_entrada:.4f} | Salida: ${precio_tp:.4f}\n{porcentaje:.2f}% | ${ganancia:.2f}\n⚡ Cerrar posición AHORA")
                 registrar_operacion("TP", precio_entrada, precio_tp, round(porcentaje, 2), ganancia)
@@ -228,6 +228,7 @@ def verificar_senal():
                 porcentaje = ((precio_sl - precio_entrada) / precio_entrada) * 100
                 ganancia = round(POSICION * porcentaje / 100 - COMISION, 2)
                 en_operacion = False
+                alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(f"❌ SALIDA LONG — SL\nEntrada: ${precio_entrada:.4f} | Salida: ${precio_sl:.4f}\n{porcentaje:.2f}% | ${ganancia:.2f}\n⚡ Cerrar posición AHORA")
                 registrar_operacion("SL", precio_entrada, precio_sl, round(porcentaje, 2), ganancia)
@@ -236,6 +237,7 @@ def verificar_senal():
                 porcentaje = ((precio_entrada - precio_tp) / precio_entrada) * 100
                 ganancia = round(POSICION * porcentaje / 100 - COMISION, 2)
                 en_operacion = False
+                alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(f"✅ SALIDA SHORT — TP\nEntrada: ${precio_entrada:.4f} | Salida: ${precio_tp:.4f}\n{porcentaje:.2f}% | ${ganancia:.2f}\n⚡ Cerrar posición AHORA")
                 registrar_operacion("TP", precio_entrada, precio_tp, round(porcentaje, 2), ganancia)
@@ -244,6 +246,7 @@ def verificar_senal():
                 porcentaje = ((precio_entrada - precio_sl) / precio_entrada) * 100
                 ganancia = round(POSICION * porcentaje / 100 - COMISION, 2)
                 en_operacion = False
+                alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(f"❌ SALIDA SHORT — SL\nEntrada: ${precio_entrada:.4f} | Salida: ${precio_sl:.4f}\n{porcentaje:.2f}% | ${ganancia:.2f}\n⚡ Cerrar posición AHORA")
                 registrar_operacion("SL", precio_entrada, precio_sl, round(porcentaje, 2), ganancia)
@@ -256,6 +259,7 @@ def verificar_senal():
                 esperando_confirmacion = False
                 ciclos_esperando = 0
                 en_operacion = True
+                alerta_temprana_ctx = None
                 guardar_estado()
                 dir_txt = "LONG 📈" if direccion == 'LONG' else "SHORT 📉"
                 enviar_mensaje(
@@ -270,36 +274,44 @@ def verificar_senal():
                 if ciclos_esperando >= CICLOS_MAX_ESPERA:
                     esperando_confirmacion = False
                     ciclos_esperando = 0
+                    alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje("⏱️ Señal cancelada por tiempo (3 min sin respuesta)")
             return
 
-        # ── No operar si está durmiendo ───────────────────────────────────
         if dormido:
             return
 
-        # ── Verificar confluencia ─────────────────────────────────────────
+        # ── Verificar confluencia de los 3 timeframes ─────────────────────
         confluencia = (ctx_4h is not None and
                        ctx_1h is not None and
                        ctx_15m is not None and
                        ctx_4h == ctx_1h == ctx_15m)
 
         if not confluencia:
-            # Alerta temprana — 2 de 3 alineados
-            ctxs = [c for c in [ctx_4h, ctx_1h, ctx_15m] if c is not None]
-            if len(ctxs) == 2 and ctxs[0] == ctxs[1]:
-                dir_alerta = ctxs[0]
-                banda_ok = (dir_alerta == 'LONG' and banda_inf_tocada_5m) or \
-                           (dir_alerta == 'SHORT' and banda_sup_tocada_5m)
-                if banda_ok:
-                    enviar_mensaje(
-                        f"⚠️ ALERTA TEMPRANA — {dir_alerta}\n"
-                        f"2 de 3 timeframes alineados\n"
-                        f"Prepará Bybit, señal próxima"
-                    )
+            # Si cambió el contexto, resetear alerta temprana
+            alerta_temprana_ctx = None
+            guardar_estado()
             return
 
         dir_ctx = ctx_4h
+
+        # ── Alerta temprana — una sola vez por contexto ───────────────────
+        # Solo cuando los 3 están alineados + banda tocada en 5m
+        banda_tocada = (dir_ctx == 'LONG' and banda_inf_tocada_5m) or \
+                       (dir_ctx == 'SHORT' and banda_sup_tocada_5m)
+
+        if banda_tocada and alerta_temprana_ctx != dir_ctx:
+            alerta_temprana_ctx = dir_ctx
+            guardar_estado()
+            dir_emoji = "📈" if dir_ctx == 'LONG' else "📉"
+            banda_txt = "banda inferior" if dir_ctx == 'LONG' else "banda superior"
+            enviar_mensaje(
+                f"⚠️ ALERTA TEMPRANA — {dir_ctx} {dir_emoji}\n"
+                f"3 timeframes alineados (4H+1H+15m)\n"
+                f"Precio tocó {banda_txt} en 5m\n"
+                f"Esperá cruce del RSI — prepará Bybit"
+            )
 
         # ── Señal LONG ────────────────────────────────────────────────────
         if dir_ctx == 'LONG' and not en_operacion:
@@ -311,6 +323,7 @@ def verificar_senal():
                 esperando_confirmacion = True
                 ciclos_esperando = 0
                 banda_inf_tocada_5m = False
+                alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(
                     f"🟢 SEÑAL LONG — Triple Turtle Soap 📈\n"
@@ -331,6 +344,7 @@ def verificar_senal():
                 esperando_confirmacion = True
                 ciclos_esperando = 0
                 banda_sup_tocada_5m = False
+                alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(
                     f"🔴 SEÑAL SHORT — Triple Turtle Soap 📉\n"
