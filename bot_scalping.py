@@ -1,10 +1,11 @@
 import requests
 import pandas as pd
 import ta
-from datetime import datetime
+from datetime import datetime, timezone
 import time
 import json
 import os
+import yfinance as yf
 
 # ── Configuración ─────────────────────────────────────────────────────────────
 TOKEN = "8876856197:AAG4x0X7i61Sfk9rW-22vfftqVQ517Ri-UA"
@@ -14,7 +15,7 @@ NOTION_TOKEN = "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"
 NOTION_FONDEO_DB_ID = "3799d658-98f4-8053-9868-f003b846e5d7"
 ESTADO_FILE = "estado_turtle.json"
 
-SYMBOL = "LINKUSDT"
+SYMBOL = "LINK-USD"
 MARGEN = 1000
 APALANCAMIENTO = 50
 POSICION = MARGEN * APALANCAMIENTO  # $50,000
@@ -33,7 +34,6 @@ precio_tp = 0
 precio_sl = 0
 direccion = None
 esperando_confirmacion = False
-alerta_ts_pendiente = None
 ultimo_update_id = None
 banda_inf_tocada_5m = False
 banda_sup_tocada_5m = False
@@ -62,14 +62,14 @@ def cargar_estado():
     try:
         with open(ESTADO_FILE, "r") as f:
             estado = json.load(f)
-        en_operacion         = estado.get("en_operacion", False)
-        precio_entrada       = estado.get("precio_entrada", 0)
-        precio_tp            = estado.get("precio_tp", 0)
-        precio_sl            = estado.get("precio_sl", 0)
-        direccion            = estado.get("direccion", None)
+        en_operacion           = estado.get("en_operacion", False)
+        precio_entrada         = estado.get("precio_entrada", 0)
+        precio_tp              = estado.get("precio_tp", 0)
+        precio_sl              = estado.get("precio_sl", 0)
+        direccion              = estado.get("direccion", None)
         esperando_confirmacion = estado.get("esperando_confirmacion", False)
-        ultimo_update_id     = estado.get("ultimo_update_id", None)
-        ciclos_esperando     = estado.get("ciclos_esperando", 0)
+        ultimo_update_id       = estado.get("ultimo_update_id", None)
+        ciclos_esperando       = estado.get("ciclos_esperando", 0)
         if en_operacion:
             enviar_mensaje(f"🔄 Bot reiniciado con operación abierta\n{direccion} a ${precio_entrada:.4f}\nTP: ${precio_tp:.4f} | SL: ${precio_sl:.4f}")
         elif esperando_confirmacion:
@@ -78,7 +78,7 @@ def cargar_estado():
             guardar_estado()
             enviar_mensaje("🔄 Bot reiniciado — señal pendiente cancelada")
         else:
-            enviar_mensaje("🔄 Bot Turtle reiniciado — sin operación abierta")
+            enviar_mensaje("🤖 Bot Turtle iniciado — sin operación abierta")
     except Exception as e:
         enviar_mensaje(f"⚠️ Error cargando estado: {str(e)}")
 
@@ -87,7 +87,10 @@ def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     for chat in [CHAT_ID, CHAT_ID_AMIGO]:
         params = {"chat_id": chat, "text": texto}
-        requests.get(url, params=params)
+        try:
+            requests.get(url, params=params)
+        except:
+            pass
 
 def obtener_ultimo_mensaje():
     global ultimo_update_id
@@ -127,21 +130,31 @@ def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dol
             "Fecha": {"date": {"start": datetime.now().strftime("%Y-%m-%d")}}
         }
     }
-    response = requests.post(url, headers=headers, json=data)
-    return response.status_code
+    try:
+        response = requests.post(url, headers=headers, json=data)
+        return response.status_code
+    except:
+        return 0
 
 # ── Descarga de datos ─────────────────────────────────────────────────────────
 def get_data(interval, period):
-    import yfinance as yf
-    data = yf.download(f"LINK-USD", period=period, interval=interval, progress=False)
-    data = data[['Close', 'High', 'Low', 'Open', 'Volume']]
-    data.columns = ['close', 'high', 'low', 'open', 'volume']
-    close = data['close']
-    data['rsi'] = ta.momentum.RSIIndicator(close, window=14).rsi()
-    bb = ta.volatility.BollingerBands(close, window=20, window_dev=2.0)
-    data['bb_inf'] = bb.bollinger_lband()
-    data['bb_sup'] = bb.bollinger_hband()
-    return data.dropna()
+    try:
+        data = yf.download(SYMBOL, period=period, interval=interval, progress=False)
+        if data is None or len(data) < 20:
+            return None
+        data = data[['Close', 'High', 'Low', 'Open', 'Volume']]
+        data.columns = ['close', 'high', 'low', 'open', 'volume']
+        close = data['close']
+        data['rsi'] = ta.momentum.RSIIndicator(close, window=14).rsi()
+        bb = ta.volatility.BollingerBands(close, window=20, window_dev=2.0)
+        data['bb_inf'] = bb.bollinger_lband()
+        data['bb_sup'] = bb.bollinger_hband()
+        result = data.dropna()
+        if len(result) < 2:
+            return None
+        return result
+    except Exception as e:
+        return None
 
 # ── Detección de fakeout ──────────────────────────────────────────────────────
 def detectar_fakeout(data, i):
@@ -159,32 +172,37 @@ def detectar_fakeout(data, i):
     return None
 
 def get_contexto(data):
-    """Retorna el fakeout de la última vela"""
+    if data is None or len(data) < 2:
+        return None
     return detectar_fakeout(data, len(data) - 1)
 
 # ── Lógica principal ──────────────────────────────────────────────────────────
 def verificar_senal():
     global en_operacion, precio_entrada, precio_tp, precio_sl
-    global direccion, esperando_confirmacion, alerta_ts_pendiente
+    global direccion, esperando_confirmacion
     global banda_inf_tocada_5m, banda_sup_tocada_5m, ciclos_esperando
 
     try:
         # Verificar horario de sueño
-        hora_utc = datetime.utcnow().hour
+        hora_utc = datetime.now(timezone.utc).hour
         dormido = HORA_INICIO_SUENO <= hora_utc < HORA_FIN_SUENO
 
-        # Descargar datos de los 4 timeframes
+        # Descargar datos
         df_4h  = get_data("4h",  "60d")
         df_1h  = get_data("1h",  "7d")
         df_15m = get_data("15m", "5d")
         df_5m  = get_data("5m",  "2d")
 
-        # Contexto actual de cada timeframe
+        if df_5m is None:
+            enviar_mensaje("⚠️ Error descargando datos de 5m")
+            return
+
+        # Contextos
         ctx_4h  = get_contexto(df_4h)
         ctx_1h  = get_contexto(df_1h)
         ctx_15m = get_contexto(df_15m)
 
-        # Datos actuales de 5m
+        # Datos actuales 5m
         precio_actual = float(df_5m['close'].iloc[-1])
         rsi_actual    = float(df_5m['rsi'].iloc[-1])
         rsi_anterior  = float(df_5m['rsi'].iloc[-2])
@@ -196,7 +214,7 @@ def verificar_senal():
         if precio_actual >= bb_sup:
             banda_sup_tocada_5m = True
 
-        # ── Salida de operación ───────────────────────────────────────────
+        # ── Salida ────────────────────────────────────────────────────────
         if en_operacion:
             if direccion == 'LONG' and precio_actual >= precio_tp:
                 porcentaje = ((precio_tp - precio_entrada) / precio_entrada) * 100
@@ -240,7 +258,12 @@ def verificar_senal():
                 en_operacion = True
                 guardar_estado()
                 dir_txt = "LONG 📈" if direccion == 'LONG' else "SHORT 📉"
-                enviar_mensaje(f"🟢 ENTRADA CONFIRMADA — {dir_txt}\nPrecio: ${precio_entrada:.4f}\nTP: ${precio_tp:.4f} | SL: ${precio_sl:.4f}\n⚡ Entrar con $1,000 margen 50x en Bybit")
+                enviar_mensaje(
+                    f"🟢 ENTRADA CONFIRMADA — {dir_txt}\n"
+                    f"Precio: ${precio_entrada:.4f}\n"
+                    f"TP: ${precio_tp:.4f} | SL: ${precio_sl:.4f}\n"
+                    f"⚡ Entrar con $1,000 margen 50x en Bybit"
+                )
             else:
                 ciclos_esperando += 1
                 guardar_estado()
@@ -251,10 +274,11 @@ def verificar_senal():
                     enviar_mensaje("⏱️ Señal cancelada por tiempo (3 min sin respuesta)")
             return
 
-        # ── Verificar confluencia ─────────────────────────────────────────
+        # ── No operar si está durmiendo ───────────────────────────────────
         if dormido:
             return
 
+        # ── Verificar confluencia ─────────────────────────────────────────
         confluencia = (ctx_4h is not None and
                        ctx_1h is not None and
                        ctx_15m is not None and
@@ -268,12 +292,16 @@ def verificar_senal():
                 banda_ok = (dir_alerta == 'LONG' and banda_inf_tocada_5m) or \
                            (dir_alerta == 'SHORT' and banda_sup_tocada_5m)
                 if banda_ok:
-                    enviar_mensaje(f"⚠️ ALERTA TEMPRANA — {dir_alerta}\n2 de 3 timeframes alineados\nPreparate en Bybit, señal próxima")
+                    enviar_mensaje(
+                        f"⚠️ ALERTA TEMPRANA — {dir_alerta}\n"
+                        f"2 de 3 timeframes alineados\n"
+                        f"Prepará Bybit, señal próxima"
+                    )
             return
 
         dir_ctx = ctx_4h
 
-        # ── Señal de entrada LONG ─────────────────────────────────────────
+        # ── Señal LONG ────────────────────────────────────────────────────
         if dir_ctx == 'LONG' and not en_operacion:
             if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada_5m:
                 precio_entrada = precio_actual
@@ -293,7 +321,7 @@ def verificar_senal():
                     f"⚡ Respondé 'si' para confirmar (3 min)"
                 )
 
-        # ── Señal de entrada SHORT ────────────────────────────────────────
+        # ── Señal SHORT ───────────────────────────────────────────────────
         elif dir_ctx == 'SHORT' and not en_operacion:
             if rsi_anterior >= 70 and rsi_actual < 70 and banda_sup_tocada_5m:
                 precio_entrada = precio_actual
@@ -314,7 +342,7 @@ def verificar_senal():
                 )
 
     except Exception as e:
-        enviar_mensaje(f"⚠️ Error bot turtle: {str(e)}")
+        enviar_mensaje(f"⚠️ Error bot scalping: {str(e)}")
 
 # ── Arranque ──────────────────────────────────────────────────────────────────
 obtener_ultimo_mensaje()
