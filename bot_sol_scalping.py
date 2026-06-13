@@ -277,13 +277,9 @@ def verificar_senal():
                        ctx_1h == ctx_15m == ctx_5m)
 
         if not confluencia:
-            # Resetear banda y alerta cuando cambia el contexto
-            if alerta_temprana_ctx is not None:
-                alerta_temprana_ctx = None
-                banda_inf_tocada = False
-                banda_sup_tocada = False
-                guardar_estado()
-            return
+    alerta_temprana_ctx = None
+    guardar_estado()
+    return
 
         dir_ctx = ctx_1h
 
