@@ -277,9 +277,9 @@ def verificar_senal():
                        ctx_1h == ctx_15m == ctx_5m)
 
         if not confluencia:
-    alerta_temprana_ctx = None
-    guardar_estado()
-    return
+            alerta_temprana_ctx = None
+            guardar_estado()
+            return
 
         dir_ctx = ctx_1h
 
