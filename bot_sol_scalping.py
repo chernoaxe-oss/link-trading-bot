@@ -16,7 +16,7 @@ ESTADO_FILE = "estado_sol_scalping.json"
 
 SYMBOL = "SOL-USD"
 TRADING_POWER = 6000
-POSICION = TRADING_POWER * 0.30  # $1,800
+POSICION = TRADING_POWER * 0.30
 
 HORA_INICIO_SUENO = 2
 HORA_FIN_SUENO = 10
@@ -40,7 +40,9 @@ def guardar_estado():
         "esperando_confirmacion": esperando_confirmacion,
         "ultimo_update_id": ultimo_update_id,
         "ciclos_esperando": ciclos_esperando,
-        "alerta_temprana_ctx": alerta_temprana_ctx
+        "alerta_temprana_ctx": alerta_temprana_ctx,
+        "banda_inf_tocada": banda_inf_tocada,
+        "banda_sup_tocada": banda_sup_tocada
     }
     with open(ESTADO_FILE, "w") as f:
         json.dump(estado, f)
@@ -49,6 +51,7 @@ def cargar_estado():
     global en_operacion, precio_entrada, direccion
     global esperando_confirmacion, ultimo_update_id
     global ciclos_esperando, alerta_temprana_ctx
+    global banda_inf_tocada, banda_sup_tocada
     if not os.path.exists(ESTADO_FILE):
         return
     try:
@@ -61,6 +64,8 @@ def cargar_estado():
         ultimo_update_id       = estado.get("ultimo_update_id", None)
         ciclos_esperando       = estado.get("ciclos_esperando", 0)
         alerta_temprana_ctx    = estado.get("alerta_temprana_ctx", None)
+        banda_inf_tocada       = estado.get("banda_inf_tocada", False)
+        banda_sup_tocada       = estado.get("banda_sup_tocada", False)
         if en_operacion:
             enviar_mensaje(f"🔄 Bot SOL reiniciado con operación abierta\n{direccion} desde ${precio_entrada:.4f}")
         elif esperando_confirmacion:
@@ -69,7 +74,7 @@ def cargar_estado():
             guardar_estado()
             enviar_mensaje("🔄 Bot SOL reiniciado — señal pendiente cancelada")
         else:
-            enviar_mensaje("⚡ Bot Scalping SOL iniciado\n1H+15m+5m → 1m | Posición $1,800")
+            enviar_mensaje("⚡ Bot SOL corregido — banda persiste entre ciclos")
     except Exception as e:
         enviar_mensaje(f"⚠️ Error cargando estado SOL: {str(e)}")
 
@@ -188,12 +193,15 @@ def verificar_senal():
         bb_inf_ant      = float(df_1m['bb_inf'].iloc[-2])
         bb_sup_ant      = float(df_1m['bb_sup'].iloc[-2])
 
+        # Actualizar bandas — NUNCA se resetean acá, solo después de entrada
         if precio_actual <= bb_inf:
             banda_inf_tocada = True
+            guardar_estado()
         if precio_actual >= bb_sup:
             banda_sup_tocada = True
+            guardar_estado()
 
-        # Salida natural
+        # Salida natural — siempre activa
         if en_operacion:
             if direccion == 'LONG':
                 if rsi_anterior >= 70 and precio_anterior >= bb_sup_ant:
@@ -201,6 +209,7 @@ def verificar_senal():
                     resultado = "TP" if porcentaje > 0 else "SL"
                     ganancia = round(POSICION * porcentaje / 100, 2)
                     en_operacion = False
+                    banda_inf_tocada = False
                     alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje(
@@ -217,6 +226,7 @@ def verificar_senal():
                     resultado = "TP" if porcentaje > 0 else "SL"
                     ganancia = round(POSICION * porcentaje / 100, 2)
                     en_operacion = False
+                    banda_sup_tocada = False
                     alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje(
@@ -260,20 +270,24 @@ def verificar_senal():
         if dormido:
             return
 
-        # Verificar confluencia 1H+15m+5m
+        # Verificar confluencia
         confluencia = (ctx_1h  is not None and
                        ctx_15m is not None and
                        ctx_5m  is not None and
                        ctx_1h == ctx_15m == ctx_5m)
 
         if not confluencia:
-            alerta_temprana_ctx = None
-            guardar_estado()
+            # Resetear banda y alerta cuando cambia el contexto
+            if alerta_temprana_ctx is not None:
+                alerta_temprana_ctx = None
+                banda_inf_tocada = False
+                banda_sup_tocada = False
+                guardar_estado()
             return
 
         dir_ctx = ctx_1h
 
-        # Alerta temprana
+        # Alerta temprana — una sola vez
         banda_tocada = (dir_ctx == 'LONG' and banda_inf_tocada) or \
                        (dir_ctx == 'SHORT' and banda_sup_tocada)
 
@@ -303,7 +317,7 @@ def verificar_senal():
                     f"1H: {ctx_1h} | 15m: {ctx_15m} | 5m: {ctx_5m}\n"
                     f"Precio: ${precio_entrada:.4f}\n"
                     f"Posición: $1,800 | Salida natural\n"
-                    f"⚡ Respondé 'si' para confirmar (3 min)"
+                    f"⚡ Respondé 'si' para confirmar (tres min)"
                 )
 
         # Señal SHORT
@@ -321,7 +335,7 @@ def verificar_senal():
                     f"1H: {ctx_1h} | 15m: {ctx_15m} | 5m: {ctx_5m}\n"
                     f"Precio: ${precio_entrada:.4f}\n"
                     f"Posición: $1,800 | Salida natural\n"
-                    f"⚡ Respondé 'si' para confirmar (3 min)"
+                    f"⚡ Respondé 'si' para confirmar (tres min)"
                 )
 
     except Exception as e:
