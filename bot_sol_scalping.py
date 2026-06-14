@@ -74,7 +74,7 @@ def cargar_estado():
             guardar_estado()
             enviar_mensaje("🔄 Bot SOL reiniciado — señal pendiente cancelada")
         else:
-            enviar_mensaje("⚡ Bot SOL corregido — banda persiste entre ciclos")
+            enviar_mensaje("⚡ Bot SOL Scalping activo — banda persiste entre ciclos")
     except Exception as e:
         enviar_mensaje(f"⚠️ Error cargando estado SOL: {str(e)}")
 
@@ -193,7 +193,7 @@ def verificar_senal():
         bb_inf_ant      = float(df_1m['bb_inf'].iloc[-2])
         bb_sup_ant      = float(df_1m['bb_sup'].iloc[-2])
 
-        # Actualizar bandas — NUNCA se resetean acá, solo después de entrada
+        # Actualizar bandas — solo se resetean después de entrada
         if precio_actual <= bb_inf:
             banda_inf_tocada = True
             guardar_estado()
@@ -313,7 +313,7 @@ def verificar_senal():
                     f"1H: {ctx_1h} | 15m: {ctx_15m} | 5m: {ctx_5m}\n"
                     f"Precio: ${precio_entrada:.4f}\n"
                     f"Posición: $1,800 | Salida natural\n"
-                    f"⚡ Respondé 'si' para confirmar (tres min)"
+                    f"⚡ Respondé 'si' para confirmar (3 min)"
                 )
 
         # Señal SHORT
@@ -331,7 +331,7 @@ def verificar_senal():
                     f"1H: {ctx_1h} | 15m: {ctx_15m} | 5m: {ctx_5m}\n"
                     f"Precio: ${precio_entrada:.4f}\n"
                     f"Posición: $1,800 | Salida natural\n"
-                    f"⚡ Respondé 'si' para confirmar (tres min)"
+                    f"⚡ Respondé 'si' para confirmar (3 min)"
                 )
 
     except Exception as e:
