@@ -16,7 +16,7 @@ ESTADO_FILE = "estado_sol_scalping.json"
 
 SYMBOL = "SOL-USD"
 TRADING_POWER = 6000
-POSICION = TRADING_POWER * 0.30
+POSICION = TRADING_POWER * 0.30  # $1,800
 
 HORA_INICIO_SUENO = 2
 HORA_FIN_SUENO = 10
@@ -67,16 +67,16 @@ def cargar_estado():
         banda_inf_tocada       = estado.get("banda_inf_tocada", False)
         banda_sup_tocada       = estado.get("banda_sup_tocada", False)
         if en_operacion:
-            enviar_mensaje(f"🔄 Bot SOL reiniciado con operación abierta\n{direccion} desde ${precio_entrada:.4f}")
+            enviar_mensaje(f"🔄 Bot Q1 SOL reiniciado con operación abierta\n{direccion} desde ${precio_entrada:.4f}")
         elif esperando_confirmacion:
             esperando_confirmacion = False
             ciclos_esperando = 0
             guardar_estado()
-            enviar_mensaje("🔄 Bot SOL reiniciado — señal pendiente cancelada")
+            enviar_mensaje("🔄 Bot Q1 SOL reiniciado — señal pendiente cancelada")
         else:
-            enviar_mensaje("⚡ Bot SOL Scalping activo — banda persiste entre ciclos")
+            enviar_mensaje("⚡ Bot Quantfury 1 SOL iniciado — salida natural 1m")
     except Exception as e:
-        enviar_mensaje(f"⚠️ Error cargando estado SOL: {str(e)}")
+        enviar_mensaje(f"⚠️ Error cargando estado Q1 SOL: {str(e)}")
 
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -114,8 +114,8 @@ def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dol
     data = {
         "parent": {"database_id": NOTION_FONDEO_DB_ID},
         "properties": {
-            "Nombre": {"title": [{"text": {"content": f"SOL Scalping - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]},
-            "PLATAFORMA": {"select": {"name": "Quantfury SOL"}},
+            "Nombre": {"title": [{"text": {"content": f"SOL Q1 - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]},
+            "PLATAFORMA": {"select": {"name": "Quantfury Q1"}},
             "Resultado": {"select": {"name": resultado}},
             "Precio de entradsa": {"number": p_entrada},
             "Precio de salida": {"number": p_salida},
@@ -193,7 +193,6 @@ def verificar_senal():
         bb_inf_ant      = float(df_1m['bb_inf'].iloc[-2])
         bb_sup_ant      = float(df_1m['bb_sup'].iloc[-2])
 
-        # Actualizar bandas — solo se resetean después de entrada
         if precio_actual <= bb_inf:
             banda_inf_tocada = True
             guardar_estado()
@@ -213,10 +212,10 @@ def verificar_senal():
                     alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje(
-                        f"{'✅' if resultado=='TP' else '❌'} SALIDA LONG — {resultado} SOL\n"
+                        f"{'✅' if resultado=='TP' else '❌'} SALIDA LONG — {resultado} SOL Q1\n"
                         f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_actual:.4f}\n"
                         f"{porcentaje:.2f}% | ${ganancia:.2f}\n"
-                        f"⚡ Cerrar posición SOL en Quantfury AHORA"
+                        f"⚡ Cerrar posición SOL en Quantfury Q1 AHORA"
                     )
                     registrar_operacion(resultado, precio_entrada, precio_actual,
                                        round(porcentaje, 2), ganancia)
@@ -230,10 +229,10 @@ def verificar_senal():
                     alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje(
-                        f"{'✅' if resultado=='TP' else '❌'} SALIDA SHORT — {resultado} SOL\n"
+                        f"{'✅' if resultado=='TP' else '❌'} SALIDA SHORT — {resultado} SOL Q1\n"
                         f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_actual:.4f}\n"
                         f"{porcentaje:.2f}% | ${ganancia:.2f}\n"
-                        f"⚡ Cerrar posición SOL en Quantfury AHORA"
+                        f"⚡ Cerrar posición SOL en Quantfury Q1 AHORA"
                     )
                     registrar_operacion(resultado, precio_entrada, precio_actual,
                                        round(porcentaje, 2), ganancia)
@@ -250,10 +249,10 @@ def verificar_senal():
                 guardar_estado()
                 dir_txt = "LONG 📈" if direccion == 'LONG' else "SHORT 📉"
                 enviar_mensaje(
-                    f"🟢 ENTRADA CONFIRMADA — {dir_txt} SOL\n"
+                    f"🟢 ENTRADA CONFIRMADA — {dir_txt} SOL Q1\n"
                     f"Precio: ${precio_entrada:.4f}\n"
                     f"Posición: $1,800 (30% de $6,000 TP)\n"
-                    f"⚡ Entrar en SOL en Quantfury AHORA\n"
+                    f"⚡ Entrar en SOL en Quantfury Q1 AHORA\n"
                     f"Salida: natural (RSI+Bollinger en 1m)"
                 )
             else:
@@ -264,7 +263,7 @@ def verificar_senal():
                     ciclos_esperando = 0
                     alerta_temprana_ctx = None
                     guardar_estado()
-                    enviar_mensaje("⏱️ Señal SOL cancelada por tiempo")
+                    enviar_mensaje("⏱️ Señal SOL Q1 cancelada por tiempo")
             return
 
         if dormido:
@@ -292,10 +291,10 @@ def verificar_senal():
             guardar_estado()
             banda_txt = "banda inferior" if dir_ctx == 'LONG' else "banda superior"
             enviar_mensaje(
-                f"⚠️ ALERTA SOL — {dir_ctx} {'📈' if dir_ctx=='LONG' else '📉'}\n"
+                f"⚠️ ALERTA SOL Q1 — {dir_ctx} {'📈' if dir_ctx=='LONG' else '📉'}\n"
                 f"1H+15m+5m alineados\n"
                 f"Precio tocó {banda_txt} en 1m\n"
-                f"Esperá cruce del RSI — prepará Quantfury SOL"
+                f"Esperá cruce del RSI — prepará Quantfury Q1"
             )
 
         # Señal LONG
@@ -309,7 +308,7 @@ def verificar_senal():
                 alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(
-                    f"🟢 SEÑAL LONG — SOL Scalping 📈\n"
+                    f"🟢 SEÑAL LONG — SOL Q1 📈\n"
                     f"1H: {ctx_1h} | 15m: {ctx_15m} | 5m: {ctx_5m}\n"
                     f"Precio: ${precio_entrada:.4f}\n"
                     f"Posición: $1,800 | Salida natural\n"
@@ -327,7 +326,7 @@ def verificar_senal():
                 alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(
-                    f"🔴 SEÑAL SHORT — SOL Scalping 📉\n"
+                    f"🔴 SEÑAL SHORT — SOL Q1 📉\n"
                     f"1H: {ctx_1h} | 15m: {ctx_15m} | 5m: {ctx_5m}\n"
                     f"Precio: ${precio_entrada:.4f}\n"
                     f"Posición: $1,800 | Salida natural\n"
@@ -335,13 +334,13 @@ def verificar_senal():
                 )
 
     except Exception as e:
-        enviar_mensaje(f"⚠️ Error bot SOL: {str(e)}")
+        enviar_mensaje(f"⚠️ Error bot Q1 SOL: {str(e)}")
 
 obtener_ultimo_mensaje()
 cargar_estado()
 
 while True:
     now = datetime.now()
-    print(f"{now.strftime('%H:%M:%S')} - SOL verificando...")
+    print(f"{now.strftime('%H:%M:%S')} - Q1 SOL verificando...")
     verificar_senal()
     time.sleep(30)
