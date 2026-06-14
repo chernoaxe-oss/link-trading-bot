@@ -5,7 +5,7 @@ import ta
 import time
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 TOKEN = "8876856197:AAG4x0X7i61Sfk9rW-22vfftqVQ517Ri-UA"
 CHAT_ID = "1482855145"
@@ -21,6 +21,7 @@ POSICION = MARGEN * APALANCAMIENTO  # $37,500
 TP_PCT = 0.005   # 0.5%
 SL_PCT = 0.02    # 2.0%
 COMISION = POSICION * 0.0011
+BANDA_EXPIRACION_MIN = 10
 
 HORA_INICIO_SUENO = 2
 HORA_FIN_SUENO = 10
@@ -34,9 +35,11 @@ esperando_confirmacion = False
 ultimo_update_id = None
 banda_inf_tocada = False
 banda_sup_tocada = False
+banda_inf_tocada_ts = None
+banda_sup_tocada_ts = None
 ciclos_esperando = 0
 alerta_temprana_ctx = None
-CICLOS_MAX_ESPERA = 6  # 3 minutos (6 x 30s)
+CICLOS_MAX_ESPERA = 6
 
 def guardar_estado():
     estado = {
@@ -50,7 +53,9 @@ def guardar_estado():
         "ciclos_esperando": ciclos_esperando,
         "alerta_temprana_ctx": alerta_temprana_ctx,
         "banda_inf_tocada": banda_inf_tocada,
-        "banda_sup_tocada": banda_sup_tocada
+        "banda_sup_tocada": banda_sup_tocada,
+        "banda_inf_tocada_ts": banda_inf_tocada_ts.isoformat() if banda_inf_tocada_ts else None,
+        "banda_sup_tocada_ts": banda_sup_tocada_ts.isoformat() if banda_sup_tocada_ts else None
     }
     with open(ESTADO_FILE, "w") as f:
         json.dump(estado, f)
@@ -60,7 +65,9 @@ def cargar_estado():
     global direccion, esperando_confirmacion, ultimo_update_id
     global ciclos_esperando, alerta_temprana_ctx
     global banda_inf_tocada, banda_sup_tocada
+    global banda_inf_tocada_ts, banda_sup_tocada_ts
     if not os.path.exists(ESTADO_FILE):
+        enviar_mensaje("⚡ Bot Fondeo SOL iniciado — TP0.5% SL2.0% banda expira 10 min")
         return
     try:
         with open(ESTADO_FILE, "r") as f:
@@ -76,6 +83,10 @@ def cargar_estado():
         alerta_temprana_ctx    = estado.get("alerta_temprana_ctx", None)
         banda_inf_tocada       = estado.get("banda_inf_tocada", False)
         banda_sup_tocada       = estado.get("banda_sup_tocada", False)
+        ts_inf = estado.get("banda_inf_tocada_ts", None)
+        ts_sup = estado.get("banda_sup_tocada_ts", None)
+        banda_inf_tocada_ts = datetime.fromisoformat(ts_inf) if ts_inf else None
+        banda_sup_tocada_ts = datetime.fromisoformat(ts_sup) if ts_sup else None
         if en_operacion:
             enviar_mensaje(
                 f"🔄 Bot Fondeo SOL reiniciado con operación abierta\n"
@@ -88,7 +99,7 @@ def cargar_estado():
             guardar_estado()
             enviar_mensaje("🔄 Bot Fondeo SOL reiniciado — señal pendiente cancelada")
         else:
-            enviar_mensaje("⚡ Bot Fondeo SOL iniciado — TP0.5% SL2.0% $750 margen")
+            enviar_mensaje("⚡ Bot Fondeo SOL iniciado — TP0.5% SL2.0% banda expira 10 min")
     except Exception as e:
         enviar_mensaje(f"⚠️ Error cargando estado fondeo SOL: {str(e)}")
 
@@ -180,10 +191,13 @@ def get_contexto(data):
 def verificar_senal():
     global en_operacion, precio_entrada, precio_tp, precio_sl
     global direccion, esperando_confirmacion, ciclos_esperando
-    global banda_inf_tocada, banda_sup_tocada, alerta_temprana_ctx
+    global banda_inf_tocada, banda_sup_tocada
+    global banda_inf_tocada_ts, banda_sup_tocada_ts
+    global alerta_temprana_ctx
 
     try:
-        hora_utc = datetime.utcnow().hour
+        ahora = datetime.now(timezone.utc).replace(tzinfo=None)
+        hora_utc = ahora.hour
         dormido = HORA_INICIO_SUENO <= hora_utc < HORA_FIN_SUENO
 
         df_1h  = get_data("1h",  "7d")
@@ -201,18 +215,32 @@ def verificar_senal():
         precio_actual   = float(df_1m['close'].iloc[-1])
         rsi_actual      = float(df_1m['rsi'].iloc[-1])
         rsi_anterior    = float(df_1m['rsi'].iloc[-2])
-        precio_anterior = float(df_1m['close'].iloc[-2])
         bb_inf          = float(df_1m['bb_inf'].iloc[-1])
         bb_sup          = float(df_1m['bb_sup'].iloc[-1])
 
+        # Actualizar bandas con timestamp
         if precio_actual <= bb_inf:
             banda_inf_tocada = True
+            banda_inf_tocada_ts = ahora
             guardar_estado()
         if precio_actual >= bb_sup:
             banda_sup_tocada = True
+            banda_sup_tocada_ts = ahora
             guardar_estado()
 
-        # Salida — siempre activa
+        # Resetear banda si pasaron más de 10 minutos
+        if banda_inf_tocada and banda_inf_tocada_ts:
+            if (ahora - banda_inf_tocada_ts).seconds > BANDA_EXPIRACION_MIN * 60:
+                banda_inf_tocada = False
+                banda_inf_tocada_ts = None
+                guardar_estado()
+        if banda_sup_tocada and banda_sup_tocada_ts:
+            if (ahora - banda_sup_tocada_ts).seconds > BANDA_EXPIRACION_MIN * 60:
+                banda_sup_tocada = False
+                banda_sup_tocada_ts = None
+                guardar_estado()
+
+        # Salida TP/SL fijo — siempre activa
         if en_operacion:
             if direccion == 'LONG':
                 if precio_actual >= precio_tp:
@@ -220,6 +248,7 @@ def verificar_senal():
                     ganancia = round(POSICION * TP_PCT - COMISION, 2)
                     en_operacion = False
                     banda_inf_tocada = False
+                    banda_inf_tocada_ts = None
                     alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje(
@@ -234,6 +263,7 @@ def verificar_senal():
                     ganancia = round(-(POSICION * SL_PCT + COMISION), 2)
                     en_operacion = False
                     banda_inf_tocada = False
+                    banda_inf_tocada_ts = None
                     alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje(
@@ -249,6 +279,7 @@ def verificar_senal():
                     ganancia = round(POSICION * TP_PCT - COMISION, 2)
                     en_operacion = False
                     banda_sup_tocada = False
+                    banda_sup_tocada_ts = None
                     alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje(
@@ -263,6 +294,7 @@ def verificar_senal():
                     ganancia = round(-(POSICION * SL_PCT + COMISION), 2)
                     en_operacion = False
                     banda_sup_tocada = False
+                    banda_sup_tocada_ts = None
                     alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje(
@@ -305,7 +337,7 @@ def verificar_senal():
         if dormido:
             return
 
-        # Verificar confluencia 1H+15m+5m
+        # Verificar confluencia
         confluencia = (ctx_1h  is not None and
                        ctx_15m is not None and
                        ctx_5m  is not None and
@@ -336,13 +368,14 @@ def verificar_senal():
         # Señal LONG
         if dir_ctx == 'LONG' and not en_operacion:
             if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada:
-                precio_entrada   = precio_actual
-                precio_tp        = precio_entrada * (1 + TP_PCT)
-                precio_sl        = precio_entrada * (1 - SL_PCT)
-                direccion        = 'LONG'
+                precio_entrada      = precio_actual
+                precio_tp           = precio_entrada * (1 + TP_PCT)
+                precio_sl           = precio_entrada * (1 - SL_PCT)
+                direccion           = 'LONG'
                 esperando_confirmacion = True
-                ciclos_esperando = 0
-                banda_inf_tocada = False
+                ciclos_esperando    = 0
+                banda_inf_tocada    = False
+                banda_inf_tocada_ts = None
                 alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(
@@ -357,13 +390,14 @@ def verificar_senal():
         # Señal SHORT
         elif dir_ctx == 'SHORT' and not en_operacion:
             if rsi_anterior >= 70 and rsi_actual < 70 and banda_sup_tocada:
-                precio_entrada   = precio_actual
-                precio_tp        = precio_entrada * (1 - TP_PCT)
-                precio_sl        = precio_entrada * (1 + SL_PCT)
-                direccion        = 'SHORT'
+                precio_entrada      = precio_actual
+                precio_tp           = precio_entrada * (1 - TP_PCT)
+                precio_sl           = precio_entrada * (1 + SL_PCT)
+                direccion           = 'SHORT'
                 esperando_confirmacion = True
-                ciclos_esperando = 0
-                banda_sup_tocada = False
+                ciclos_esperando    = 0
+                banda_sup_tocada    = False
+                banda_sup_tocada_ts = None
                 alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(
