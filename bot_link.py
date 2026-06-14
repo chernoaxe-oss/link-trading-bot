@@ -14,11 +14,13 @@ NOTION_TOKEN = "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"
 NOTION_FONDEO_DB_ID = "3799d658-98f4-8053-9868-f003b846e5d7"
 ESTADO_FILE = "estado_link.json"
 
-# Horario de sueño UTC (23:00-07:00 AR = 02:00-10:00 UTC)
+SYMBOL = "SOL-USD"
+TRADING_POWER = 6000
+POSICION = TRADING_POWER * 0.30  # $1,800
+
 HORA_INICIO_SUENO = 2
 HORA_FIN_SUENO = 10
 
-# Estado
 en_operacion = False
 precio_entrada = 0
 direccion = None
@@ -28,7 +30,7 @@ banda_inf_tocada = False
 banda_sup_tocada = False
 ciclos_esperando = 0
 alerta_temprana_ctx = None
-CICLOS_MAX_ESPERA = 3  # 3 minutos (3 x 60s)
+CICLOS_MAX_ESPERA = 3
 
 def guardar_estado():
     estado = {
@@ -38,7 +40,9 @@ def guardar_estado():
         "esperando_confirmacion": esperando_confirmacion,
         "ultimo_update_id": ultimo_update_id,
         "ciclos_esperando": ciclos_esperando,
-        "alerta_temprana_ctx": alerta_temprana_ctx
+        "alerta_temprana_ctx": alerta_temprana_ctx,
+        "banda_inf_tocada": banda_inf_tocada,
+        "banda_sup_tocada": banda_sup_tocada
     }
     with open(ESTADO_FILE, "w") as f:
         json.dump(estado, f)
@@ -47,6 +51,7 @@ def cargar_estado():
     global en_operacion, precio_entrada, direccion
     global esperando_confirmacion, ultimo_update_id
     global ciclos_esperando, alerta_temprana_ctx
+    global banda_inf_tocada, banda_sup_tocada
     if not os.path.exists(ESTADO_FILE):
         return
     try:
@@ -59,17 +64,19 @@ def cargar_estado():
         ultimo_update_id       = estado.get("ultimo_update_id", None)
         ciclos_esperando       = estado.get("ciclos_esperando", 0)
         alerta_temprana_ctx    = estado.get("alerta_temprana_ctx", None)
+        banda_inf_tocada       = estado.get("banda_inf_tocada", False)
+        banda_sup_tocada       = estado.get("banda_sup_tocada", False)
         if en_operacion:
-            enviar_mensaje(f"🔄 Bot reiniciado con operación abierta\n{direccion} desde ${precio_entrada:.4f}")
+            enviar_mensaje(f"🔄 Bot Q2 SOL reiniciado con operación abierta\n{direccion} desde ${precio_entrada:.4f}")
         elif esperando_confirmacion:
             esperando_confirmacion = False
             ciclos_esperando = 0
             guardar_estado()
-            enviar_mensaje("🔄 Bot reiniciado — señal pendiente cancelada")
+            enviar_mensaje("🔄 Bot Q2 SOL reiniciado — señal pendiente cancelada")
         else:
-            enviar_mensaje("🤖 Bot Link Triple Turtle iniciado")
+            enviar_mensaje("⚡ Bot Quantfury 2 SOL iniciado — salida natural 1m")
     except Exception as e:
-        enviar_mensaje(f"⚠️ Error cargando estado: {str(e)}")
+        enviar_mensaje(f"⚠️ Error cargando estado Q2 SOL: {str(e)}")
 
 def enviar_mensaje(texto):
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
@@ -97,7 +104,7 @@ def obtener_ultimo_mensaje():
         pass
     return None
 
-def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dolares, plataforma):
+def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dolares):
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_TOKEN}",
@@ -107,8 +114,8 @@ def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dol
     data = {
         "parent": {"database_id": NOTION_FONDEO_DB_ID},
         "properties": {
-            "Nombre": {"title": [{"text": {"content": f"LINK Turtle - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]},
-            "PLATAFORMA": {"select": {"name": plataforma}},
+            "Nombre": {"title": [{"text": {"content": f"SOL Q2 - {datetime.now().strftime('%d/%m/%Y %H:%M')}"}}]},
+            "PLATAFORMA": {"select": {"name": "Quantfury Q2"}},
             "Resultado": {"select": {"name": resultado}},
             "Precio de entradsa": {"number": p_entrada},
             "Precio de salida": {"number": p_salida},
@@ -125,7 +132,7 @@ def registrar_operacion(resultado, p_entrada, p_salida, porcentaje, ganancia_dol
 
 def get_data(interval, period):
     try:
-        data = yf.download("LINK-USD", period=period, interval=interval, progress=False)
+        data = yf.download(SYMBOL, period=period, interval=interval, progress=False)
         if data is None or len(data) < 20:
             return None
         data = data[['Close', 'High', 'Low', 'Open', 'Volume']]
@@ -165,69 +172,73 @@ def verificar_senal():
         hora_utc = datetime.utcnow().hour
         dormido = HORA_INICIO_SUENO <= hora_utc < HORA_FIN_SUENO
 
-        df_4h  = get_data("4h",  "60d")
         df_1h  = get_data("1h",  "7d")
         df_15m = get_data("15m", "5d")
         df_5m  = get_data("5m",  "2d")
+        df_1m  = get_data("1m",  "1d")
 
-        if df_5m is None:
+        if df_1m is None:
             return
 
-        ctx_4h  = get_contexto(df_4h)
         ctx_1h  = get_contexto(df_1h)
         ctx_15m = get_contexto(df_15m)
+        ctx_5m  = get_contexto(df_5m)
 
-        precio_actual   = float(df_5m['close'].iloc[-1])
-        rsi_actual      = float(df_5m['rsi'].iloc[-1])
-        rsi_anterior    = float(df_5m['rsi'].iloc[-2])
-        precio_anterior = float(df_5m['close'].iloc[-2])
-        bb_inf          = float(df_5m['bb_inf'].iloc[-1])
-        bb_sup          = float(df_5m['bb_sup'].iloc[-1])
-        bb_inf_ant      = float(df_5m['bb_inf'].iloc[-2])
-        bb_sup_ant      = float(df_5m['bb_sup'].iloc[-2])
+        precio_actual   = float(df_1m['close'].iloc[-1])
+        rsi_actual      = float(df_1m['rsi'].iloc[-1])
+        rsi_anterior    = float(df_1m['rsi'].iloc[-2])
+        precio_anterior = float(df_1m['close'].iloc[-2])
+        bb_inf          = float(df_1m['bb_inf'].iloc[-1])
+        bb_sup          = float(df_1m['bb_sup'].iloc[-1])
+        bb_inf_ant      = float(df_1m['bb_inf'].iloc[-2])
+        bb_sup_ant      = float(df_1m['bb_sup'].iloc[-2])
 
         if precio_actual <= bb_inf:
             banda_inf_tocada = True
+            guardar_estado()
         if precio_actual >= bb_sup:
             banda_sup_tocada = True
+            guardar_estado()
 
-        # ── Salida natural (siempre activa, incluso durmiendo) ────────────
+        # Salida natural — siempre activa
         if en_operacion:
             if direccion == 'LONG':
                 if rsi_anterior >= 70 and precio_anterior >= bb_sup_ant:
                     porcentaje = ((precio_actual - precio_entrada) / precio_entrada) * 100
                     resultado = "TP" if porcentaje > 0 else "SL"
-                    ganancia = round(50000 * porcentaje / 100, 2)
+                    ganancia = round(POSICION * porcentaje / 100, 2)
                     en_operacion = False
+                    banda_inf_tocada = False
                     alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje(
-                        f"{'✅' if resultado=='TP' else '❌'} SALIDA LONG — {resultado}\n"
+                        f"{'✅' if resultado=='TP' else '❌'} SALIDA LONG — {resultado} SOL Q2\n"
                         f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_actual:.4f}\n"
                         f"{porcentaje:.2f}% | ${ganancia:.2f}\n"
-                        f"⚡ Cerrar posición en Quantfury AHORA"
+                        f"⚡ Cerrar posición SOL en Quantfury Q2 AHORA"
                     )
                     registrar_operacion(resultado, precio_entrada, precio_actual,
-                                       round(porcentaje, 2), ganancia, "Quantfury")
+                                       round(porcentaje, 2), ganancia)
             elif direccion == 'SHORT':
                 if rsi_anterior <= 30 and precio_anterior <= bb_inf_ant:
                     porcentaje = ((precio_entrada - precio_actual) / precio_entrada) * 100
                     resultado = "TP" if porcentaje > 0 else "SL"
-                    ganancia = round(50000 * porcentaje / 100, 2)
+                    ganancia = round(POSICION * porcentaje / 100, 2)
                     en_operacion = False
+                    banda_sup_tocada = False
                     alerta_temprana_ctx = None
                     guardar_estado()
                     enviar_mensaje(
-                        f"{'✅' if resultado=='TP' else '❌'} SALIDA SHORT — {resultado}\n"
+                        f"{'✅' if resultado=='TP' else '❌'} SALIDA SHORT — {resultado} SOL Q2\n"
                         f"Entrada: ${precio_entrada:.4f} | Salida: ${precio_actual:.4f}\n"
                         f"{porcentaje:.2f}% | ${ganancia:.2f}\n"
-                        f"⚡ Cerrar posición en Quantfury AHORA"
+                        f"⚡ Cerrar posición SOL en Quantfury Q2 AHORA"
                     )
                     registrar_operacion(resultado, precio_entrada, precio_actual,
-                                       round(porcentaje, 2), ganancia, "Quantfury")
+                                       round(porcentaje, 2), ganancia)
             return
 
-        # ── Confirmación pendiente ────────────────────────────────────────
+        # Confirmación pendiente
         if esperando_confirmacion:
             mensaje = obtener_ultimo_mensaje()
             if mensaje == "si":
@@ -238,10 +249,11 @@ def verificar_senal():
                 guardar_estado()
                 dir_txt = "LONG 📈" if direccion == 'LONG' else "SHORT 📉"
                 enviar_mensaje(
-                    f"🟢 ENTRADA CONFIRMADA — {dir_txt}\n"
+                    f"🟢 ENTRADA CONFIRMADA — {dir_txt} SOL Q2\n"
                     f"Precio: ${precio_entrada:.4f}\n"
-                    f"⚡ Entrar con 30% del Trading Power en Quantfury\n"
-                    f"Salida natural — esperá señal de salida"
+                    f"Posición: $1,800 (30% de $6,000 TP)\n"
+                    f"⚡ Entrar en SOL en Quantfury Q2 AHORA\n"
+                    f"Salida: natural (RSI+Bollinger en 1m)"
                 )
             else:
                 ciclos_esperando += 1
@@ -251,26 +263,26 @@ def verificar_senal():
                     ciclos_esperando = 0
                     alerta_temprana_ctx = None
                     guardar_estado()
-                    enviar_mensaje("⏱️ Señal Quantfury cancelada por tiempo")
+                    enviar_mensaje("⏱️ Señal SOL Q2 cancelada por tiempo")
             return
 
         if dormido:
             return
 
-        # ── Verificar confluencia ─────────────────────────────────────────
-        confluencia = (ctx_4h is not None and
-                       ctx_1h is not None and
+        # Verificar confluencia
+        confluencia = (ctx_1h  is not None and
                        ctx_15m is not None and
-                       ctx_4h == ctx_1h == ctx_15m)
+                       ctx_5m  is not None and
+                       ctx_1h == ctx_15m == ctx_5m)
 
         if not confluencia:
             alerta_temprana_ctx = None
             guardar_estado()
             return
 
-        dir_ctx = ctx_4h
+        dir_ctx = ctx_1h
 
-        # ── Alerta temprana — una sola vez ────────────────────────────────
+        # Alerta temprana — una sola vez
         banda_tocada = (dir_ctx == 'LONG' and banda_inf_tocada) or \
                        (dir_ctx == 'SHORT' and banda_sup_tocada)
 
@@ -279,13 +291,13 @@ def verificar_senal():
             guardar_estado()
             banda_txt = "banda inferior" if dir_ctx == 'LONG' else "banda superior"
             enviar_mensaje(
-                f"⚠️ ALERTA TEMPRANA — {dir_ctx} {'📈' if dir_ctx=='LONG' else '📉'}\n"
-                f"3 timeframes alineados (4H+1H+15m)\n"
-                f"Precio tocó {banda_txt} en 5m\n"
-                f"Esperá cruce del RSI — prepará Quantfury"
+                f"⚠️ ALERTA SOL Q2 — {dir_ctx} {'📈' if dir_ctx=='LONG' else '📉'}\n"
+                f"1H+15m+5m alineados\n"
+                f"Precio tocó {banda_txt} en 1m\n"
+                f"Esperá cruce del RSI — prepará Quantfury Q2"
             )
 
-        # ── Señal LONG ────────────────────────────────────────────────────
+        # Señal LONG
         if dir_ctx == 'LONG' and not en_operacion:
             if rsi_anterior <= 30 and rsi_actual > 30 and banda_inf_tocada:
                 precio_entrada   = precio_actual
@@ -296,14 +308,14 @@ def verificar_senal():
                 alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(
-                    f"🟢 SEÑAL LONG — Triple Turtle 📈\n"
-                    f"4H: {ctx_4h} | 1H: {ctx_1h} | 15m: {ctx_15m}\n"
+                    f"🟢 SEÑAL LONG — SOL Q2 📈\n"
+                    f"1H: {ctx_1h} | 15m: {ctx_15m} | 5m: {ctx_5m}\n"
                     f"Precio: ${precio_entrada:.4f}\n"
-                    f"Salida: natural (RSI+Bollinger)\n"
+                    f"Posición: $1,800 | Salida natural\n"
                     f"⚡ Respondé 'si' para confirmar (3 min)"
                 )
 
-        # ── Señal SHORT ───────────────────────────────────────────────────
+        # Señal SHORT
         elif dir_ctx == 'SHORT' and not en_operacion:
             if rsi_anterior >= 70 and rsi_actual < 70 and banda_sup_tocada:
                 precio_entrada   = precio_actual
@@ -314,21 +326,21 @@ def verificar_senal():
                 alerta_temprana_ctx = None
                 guardar_estado()
                 enviar_mensaje(
-                    f"🔴 SEÑAL SHORT — Triple Turtle 📉\n"
-                    f"4H: {ctx_4h} | 1H: {ctx_1h} | 15m: {ctx_15m}\n"
+                    f"🔴 SEÑAL SHORT — SOL Q2 📉\n"
+                    f"1H: {ctx_1h} | 15m: {ctx_15m} | 5m: {ctx_5m}\n"
                     f"Precio: ${precio_entrada:.4f}\n"
-                    f"Salida: natural (RSI+Bollinger)\n"
+                    f"Posición: $1,800 | Salida natural\n"
                     f"⚡ Respondé 'si' para confirmar (3 min)"
                 )
 
     except Exception as e:
-        enviar_mensaje(f"⚠️ Error bot link: {str(e)}")
+        enviar_mensaje(f"⚠️ Error bot Q2 SOL: {str(e)}")
 
 obtener_ultimo_mensaje()
 cargar_estado()
 
 while True:
     now = datetime.now()
-    print(f"{now.strftime('%H:%M:%S')} - Link verificando...")
+    print(f"{now.strftime('%H:%M:%S')} - Q2 SOL verificando...")
     verificar_senal()
-    time.sleep(60)
+    time.sleep(30)
