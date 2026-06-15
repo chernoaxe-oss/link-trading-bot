@@ -230,12 +230,12 @@ def verificar_senal():
 
         # Resetear banda si pasaron más de 10 minutos
         if banda_inf_tocada and banda_inf_tocada_ts:
-            if (ahora - banda_inf_tocada_ts).seconds > BANDA_EXPIRACION_MIN * 60:
+            if (ahora - banda_inf_tocada_ts).total_seconds() > BANDA_EXPIRACION_MIN * 60:
                 banda_inf_tocada = False
                 banda_inf_tocada_ts = None
                 guardar_estado()
         if banda_sup_tocada and banda_sup_tocada_ts:
-            if (ahora - banda_sup_tocada_ts).seconds > BANDA_EXPIRACION_MIN * 60:
+            if (ahora - banda_inf_tocada_ts).total_seconds() > BANDA_EXPIRACION_MIN * 60:
                 banda_sup_tocada = False
                 banda_sup_tocada_ts = None
                 guardar_estado()
